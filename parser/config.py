@@ -184,3 +184,7 @@ ALERT_EMAIL = os.environ.get("ALERT_EMAIL", "blacksabbrath@gmail.com")
 # Telegram chat_id для алертов (id администратора/группы)
 # Установить через GitHub Secret ALERT_TELEGRAM_CHAT_ID
 ALERT_TELEGRAM_CHAT_ID = os.environ.get("ALERT_TELEGRAM_CHAT_ID", "")
+
+# Размер страницы при запросе API лотов
+SNAPSHOT_PAGE_SIZE = int(os.environ.get("SNAPSHOT_PAGE_SIZE", "50"))
+DAILY_PAGE_SIZE    = int(os.environ.get("DAILY_PAGE_SIZE",    "50"))
