@@ -1,19 +1,18 @@
 """
-proxy_pool.py — пул RU/BY прокси для обхода гео-блокировки
+proxy_pool.py — пул RU/BY прокси для обхода гео-блокировки torgi.gov.by
 
-Источники прокси (в порядке приоритета):
-  1. roosterkid/HTTPS.txt  — формат: FLAG IP:PORT Xms CC [ISP]
-  2. proxifly RU http      — формат: http://IP:PORT  (уже страна=RU)
-  3. proxifly RU JSON      — формат: JSON с полем geolocation.country
-  4. TheSpeedX/http.txt    — формат: IP:PORT (без страны; валидируем через ipinfo.io)
+Все источники — GitHub Raw (доступны с GitHub Actions IP).
+Приоритет источников задан в SOURCES_ORDERED и совпадает с порядком в config.
+Страна определяется из самих данных — никаких внешних гео-API.
 
-Добавить ещё источники → PROXY_SOURCES в config.py или прямо в список ниже.
-
-Алгоритм:
-  1. build_pool()  — обходит источники по порядку, парсит, фильтрует RU/BY,
-                    возвращает перемешанный список {host, port, cc, source}.
-  2. get_session() — возвращает requests.Session() с настроенным прокси.
-  3. fetch_with_proxy(url) — пробует прокси по одному, при ошибке ротирует.
+Источники (в порядке приоритета):
+  1. roosterkid/HTTPS.txt   — флаги + явный CC в каждой строке
+  2. roosterkid/SOCKS4.txt  — то же, SOCKS4; используем как HTTP-прокси
+  3. roosterkid/SOCKS5.txt  — то же, SOCKS5
+  4. proxifly all/data.json — 40k записей, поле geolocation.country
+  5. proxifly RU/data.txt   — HTTP-прокси RU явно
+  6. clarketm/proxy-list    — формат "IP:PORT CC-…"
+  7. PROXY_EXTRA_SOURCES из config.py (пользовательские)
 """
 
 import re
@@ -22,177 +21,196 @@ import time
 import random
 import requests
 import ipaddress
-from urllib.parse import urlparse
 
 import config as cfg
 
 
+# ── Исключение ─────────────────────────────────────────────
+
 class ProxyPoolExhausted(Exception):
     """Все прокси из пула испробованы и ни один не сработал."""
 
-# ── Настройка таймаутов ────────────────────────────────────
-FETCH_TIMEOUT    = 12   # сек — таймаут загрузки одного источника прокси
-PROXY_TIMEOUT    = 20   # сек — таймаут HTTP-запроса через прокси
-VALIDATE_TIMEOUT = 8    # сек — таймаут быстрой проверки прокси
-TEST_URL         = "https://torgi.gov.by/robots.txt"  # лёгкая цель для валидации
 
-# Страны, прокси которых принимаем
-ALLOWED_CC = {"RU", "BY"}
+# ── Константы ──────────────────────────────────────────────
 
-# ── Паттерны парсинга ──────────────────────────────────────
+FETCH_TIMEOUT  = 15    # сек — загрузка одного списка прокси
+PROXY_TIMEOUT  = 25    # сек — один HTTP-запрос через прокси
+ALLOWED_CC     = {"RU", "BY"}
+
+# ── Паттерны ───────────────────────────────────────────────
+
 # roosterkid: "🇷🇺 1.2.3.4:8080 400ms RU [ISP]"
 _ROOSTERKID_RE = re.compile(
     r"(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}):(\d{2,5})\s+\S+\s+(RU|BY)\b"
 )
-# URL-формат: "http://1.2.3.4:8080" или "https://1.2.3.4:8080"
+# clarketm: "1.2.3.4:8080 RU-A-S + "
+_CLARKETM_RE = re.compile(
+    r"(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}):(\d{2,5})\s+(RU|BY)-"
+)
+# proxifly txt: "http://1.2.3.4:8080"
 _URL_FORMAT_RE = re.compile(
     r"https?://(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}):(\d{2,5})"
 )
-# Голый IP:PORT
-_IPPORT_RE = re.compile(
-    r"^(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}):(\d{2,5})$"
-)
 
 
-def _is_valid_ip(ip: str) -> bool:
+def _is_public_ip(ip: str) -> bool:
     try:
         obj = ipaddress.ip_address(ip)
-        return not (obj.is_private or obj.is_loopback or obj.is_unspecified)
+        return not (obj.is_private or obj.is_loopback or obj.is_unspecified or obj.is_multicast)
     except ValueError:
         return False
 
 
 # ════════════════════════════════════════════════════════════
-# ПАРСЕРЫ ИСТОЧНИКОВ
+# ЗАГРУЗКА ТЕКСТА
 # ════════════════════════════════════════════════════════════
 
-def _parse_roosterkid(text: str, source: str) -> list[dict]:
-    """Формат: FLAG IP:PORT Xms CC [ISP]  — страна указана явно."""
-    proxies = []
-    for m in _ROOSTERKID_RE.finditer(text):
-        ip, port, cc = m.group(1), m.group(2), m.group(3)
-        if _is_valid_ip(ip):
-            proxies.append({"host": ip, "port": int(port), "cc": cc, "source": source})
-    return proxies
+def _fetch(url: str) -> str | None:
+    try:
+        r = requests.get(
+            url, timeout=FETCH_TIMEOUT,
+            headers={"User-Agent": "Mozilla/5.0 proxy-fetcher/2.0"},
+        )
+        if r.status_code == 200:
+            return r.text
+        print(f"    [✗] {url} → HTTP {r.status_code}")
+    except requests.RequestException as e:
+        print(f"    [✗] {url} → {e}")
+    return None
 
 
-def _parse_proxifly_txt(text: str, cc: str, source: str) -> list[dict]:
-    """Формат: http://IP:PORT  (страна берётся из URL источника)."""
-    proxies = []
-    for m in _URL_FORMAT_RE.finditer(text):
-        ip, port = m.group(1), m.group(2)
-        if _is_valid_ip(ip):
-            proxies.append({"host": ip, "port": int(port), "cc": cc, "source": source})
-    return proxies
+# ════════════════════════════════════════════════════════════
+# ПАРСЕРЫ
+# ════════════════════════════════════════════════════════════
+
+def _parse_roosterkid(text: str, label: str) -> list[dict]:
+    """Строки с явным CC: FLAG IP:PORT Xms CC [ISP]"""
+    out = []
+    for ip, port, cc in _ROOSTERKID_RE.findall(text):
+        if _is_public_ip(ip):
+            out.append({"host": ip, "port": int(port), "cc": cc, "src": label})
+    return out
 
 
-def _parse_proxifly_json(text: str, source: str) -> list[dict]:
-    """Формат: [{proxy, protocol, ip, port, geolocation: {country}}]"""
-    proxies = []
+def _parse_clarketm(text: str) -> list[dict]:
+    """Строки: IP:PORT CC-Anonymity-SSL +/-"""
+    out = []
+    for ip, port, cc in _CLARKETM_RE.findall(text):
+        if _is_public_ip(ip):
+            out.append({"host": ip, "port": int(port), "cc": cc, "src": "clarketm"})
+    return out
+
+
+def _parse_proxifly_json(text: str) -> list[dict]:
+    """JSON-массив с полем geolocation.country и protocol."""
+    out = []
     try:
         data = json.loads(text)
     except json.JSONDecodeError:
-        return proxies
+        return out
     for entry in data:
         if not isinstance(entry, dict):
             continue
         cc = entry.get("geolocation", {}).get("country", "")
         if cc not in ALLOWED_CC:
             continue
-        proto = entry.get("protocol", "http").lower()
+        proto = entry.get("protocol", "").lower()
         if proto not in ("http", "https"):
             continue
         ip   = entry.get("ip", "")
         port = entry.get("port", 0)
-        if ip and port and _is_valid_ip(ip):
-            proxies.append({"host": ip, "port": int(port), "cc": cc, "source": source})
-    return proxies
+        if ip and port and _is_public_ip(ip):
+            out.append({"host": ip, "port": int(port), "cc": cc, "src": "proxifly_json"})
+    return out
 
 
-def _parse_generic_ipport(text: str, cc: str, source: str) -> list[dict]:
-    """Голые IP:PORT — страна передаётся явно (заранее известна)."""
-    proxies = []
+def _parse_proxifly_txt(text: str, cc: str, label: str) -> list[dict]:
+    """Строки вида http://IP:PORT (страна задана явно)."""
+    out = []
+    for ip, port in _URL_FORMAT_RE.findall(text):
+        if _is_public_ip(ip):
+            out.append({"host": ip, "port": int(port), "cc": cc, "src": label})
+    return out
+
+
+def _parse_ipport(text: str, cc: str, label: str) -> list[dict]:
+    """Голые IP:PORT (страна задана явно)."""
+    pat = re.compile(r"^(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}):(\d{2,5})$")
+    out = []
     for line in text.splitlines():
-        line = line.strip()
-        m = _IPPORT_RE.match(line)
-        if m and _is_valid_ip(m.group(1)):
-            proxies.append({
-                "host": m.group(1), "port": int(m.group(2)),
-                "cc": cc, "source": source,
-            })
-    return proxies
+        m = pat.match(line.strip())
+        if m and _is_public_ip(m.group(1)):
+            out.append({"host": m.group(1), "port": int(m.group(2)), "cc": cc, "src": label})
+    return out
 
 
 # ════════════════════════════════════════════════════════════
-# ЗАГРУЗКА ОДНОГО ИСТОЧНИКА
+# ОПРЕДЕЛЕНИЕ ИСТОЧНИКОВ
 # ════════════════════════════════════════════════════════════
 
-def _fetch_text(url: str) -> str | None:
-    try:
-        r = requests.get(url, timeout=FETCH_TIMEOUT,
-                         headers={"User-Agent": "Mozilla/5.0 proxy-fetcher/1.0"})
-        if r.status_code == 200:
-            return r.text
-        print(f"    [!] {url} → HTTP {r.status_code}")
-    except requests.RequestException as e:
-        print(f"    [!] {url} → {e}")
-    return None
-
-
-# ════════════════════════════════════════════════════════════
-# ОПИСАНИЕ ИСТОЧНИКОВ
-# Каждый источник — dict с полями:
-#   url      — адрес для загрузки
-#   parser   — callable(text) → [proxy_dict]
-#   cc       — код страны (если определяется источником — None)
-# ════════════════════════════════════════════════════════════
-
-def _make_sources() -> list[dict]:
+def _builtin_sources() -> list[dict]:
     """
-    Собирает список источников.
-    Кастомные URL берём из config.PROXY_EXTRA_SOURCES (список строк вида
-    'roosterkid|https://...' или 'ipport_RU|https://...' или 'ipport_BY|https://...').
+    Возвращает список встроенных источников.
+    Каждый источник: {"url": str, "parse": callable(text)->list[dict]}
+    Порядок = приоритет.
     """
-    sources = [
-        # ── Источник 1: roosterkid — с флагами стран ─────────────
+    return [
         {
-            "url": "https://raw.githubusercontent.com/roosterkid/openproxylist/main/HTTPS.txt",
-            "parser": lambda t: _parse_roosterkid(t, "roosterkid"),
+            "url":   "https://raw.githubusercontent.com/roosterkid/openproxylist/main/HTTPS.txt",
+            "parse": lambda t: _parse_roosterkid(t, "roosterkid_https"),
         },
-        # ── Источник 2: proxifly RU HTTP (plaintext) ─────────────
         {
-            "url": "https://raw.githubusercontent.com/proxifly/free-proxy-list/main/proxies/countries/RU/data.txt",
-            "parser": lambda t: _parse_proxifly_txt(t, "RU", "proxifly_RU"),
+            "url":   "https://raw.githubusercontent.com/roosterkid/openproxylist/main/SOCKS4.txt",
+            "parse": lambda t: _parse_roosterkid(t, "roosterkid_socks4"),
         },
-        # ── Источник 3: proxifly RU JSON (с геолокацией) ─────────
         {
-            "url": "https://raw.githubusercontent.com/proxifly/free-proxy-list/main/proxies/countries/RU/data.json",
-            "parser": lambda t: _parse_proxifly_json(t, "proxifly_RU_json"),
+            "url":   "https://raw.githubusercontent.com/roosterkid/openproxylist/main/SOCKS5.txt",
+            "parse": lambda t: _parse_roosterkid(t, "roosterkid_socks5"),
         },
-        # ── Источник 4: proxifly BY HTTP (plaintext) ─────────────
         {
-            "url": "https://raw.githubusercontent.com/proxifly/free-proxy-list/main/proxies/countries/BY/data.txt",
-            "parser": lambda t: _parse_proxifly_txt(t, "BY", "proxifly_BY"),
+            "url":   "https://raw.githubusercontent.com/proxifly/free-proxy-list/main/proxies/all/data.json",
+            "parse": _parse_proxifly_json,
+        },
+        {
+            "url":   "https://raw.githubusercontent.com/proxifly/free-proxy-list/main/proxies/countries/RU/data.txt",
+            "parse": lambda t: _parse_proxifly_txt(t, "RU", "proxifly_RU"),
+        },
+        {
+            "url":   "https://raw.githubusercontent.com/clarketm/proxy-list/master/proxy-list.txt",
+            "parse": _parse_clarketm,
         },
     ]
 
-    # Дополнительные источники из config (если добавлены)
+
+def _extra_sources() -> list[dict]:
+    """
+    Дополнительные источники из config.PROXY_EXTRA_SOURCES.
+    Формат строки: "тип|URL"
+
+    Типы:
+      roosterkid  — FLAG IP:PORT Xms CC [ISP]  (страна в строке)
+      ipport_RU   — голые IP:PORT, все RU
+      ipport_BY   — голые IP:PORT, все BY
+      proxifly_json — JSON proxifly с geolocation.country
+    """
+    extra = []
     for entry in getattr(cfg, "PROXY_EXTRA_SOURCES", []):
         try:
             kind, url = entry.split("|", 1)
-            kind = kind.strip().lower()
-            url  = url.strip()
+            kind, url = kind.strip().lower(), url.strip()
             if kind == "roosterkid":
-                sources.append({"url": url, "parser": lambda t, u=url: _parse_roosterkid(t, u)})
-            elif kind.startswith("ipport_"):
-                cc = kind.split("_", 1)[1].upper()
-                sources.append({"url": url, "parser": lambda t, c=cc, u=url: _parse_generic_ipport(t, c, u)})
+                extra.append({"url": url, "parse": lambda t, u=url: _parse_roosterkid(t, u)})
+            elif kind == "ipport_ru":
+                extra.append({"url": url, "parse": lambda t, u=url: _parse_ipport(t, "RU", u)})
+            elif kind == "ipport_by":
+                extra.append({"url": url, "parse": lambda t, u=url: _parse_ipport(t, "BY", u)})
             elif kind == "proxifly_json":
-                sources.append({"url": url, "parser": lambda t, u=url: _parse_proxifly_json(t, u)})
+                extra.append({"url": url, "parse": _parse_proxifly_json})
+            else:
+                print(f"  [!] PROXY_EXTRA_SOURCES: неизвестный тип '{kind}' в '{entry}'")
         except Exception as e:
             print(f"  [!] PROXY_EXTRA_SOURCES: неверный формат '{entry}': {e}")
-
-    return sources
+    return extra
 
 
 # ════════════════════════════════════════════════════════════
@@ -201,23 +219,20 @@ def _make_sources() -> list[dict]:
 
 def build_pool() -> list[dict]:
     """
-    Загружает и парсит все источники прокси.
-    Возвращает перемешанный список RU/BY proxy_dict.
-    Не бросает исключений — при отказе всех источников возвращает [].
+    Загружает все источники по порядку, дедуплицирует, перемешивает.
+    Не бросает исключений — при отказе всех вернёт [].
     """
     print("[→] Собираю пул RU/BY прокси…")
-    pool: list[dict] = []
-    seen: set[tuple] = set()
+    pool:  list[dict]  = []
+    seen:  set[tuple]  = set()
 
-    for src_def in _make_sources():
-        url = src_def["url"]
+    for src in _builtin_sources() + _extra_sources():
+        url = src["url"]
         print(f"  → {url}")
-        text = _fetch_text(url)
+        text = _fetch(url)
         if text is None:
-            print(f"    [✗] Источник недоступен, пропускаю")
             continue
-
-        candidates = src_def["parser"](text)
+        candidates = src["parse"](text)
         added = 0
         for p in candidates:
             key = (p["host"], p["port"])
@@ -225,99 +240,66 @@ def build_pool() -> list[dict]:
                 seen.add(key)
                 pool.append(p)
                 added += 1
-        print(f"    [✓] +{added} прокси (RU/BY)")
+        print(f"    [✓] +{added} RU/BY прокси  (src={candidates[0]['src'] if candidates else '-'})")
 
     random.shuffle(pool)
-    print(f"[✓] Пул: {len(pool)} уникальных RU/BY прокси")
+    print(f"[✓] Итого в пуле: {len(pool)} уникальных RU/BY прокси")
     return pool
 
 
 # ════════════════════════════════════════════════════════════
-# ВАЛИДАЦИЯ ПРОКСИ
+# ProxySession — requests.Session с авто-ротацией
 # ════════════════════════════════════════════════════════════
 
 def _proxy_url(p: dict) -> str:
     return f"http://{p['host']}:{p['port']}"
 
 
-def validate_proxy(p: dict) -> bool:
-    """Быстрая проверка: отвечает ли прокси на запрос к torgi.gov.by."""
-    purl = _proxy_url(p)
-    try:
-        r = requests.get(
-            TEST_URL,
-            proxies={"http": purl, "https": purl},
-            timeout=VALIDATE_TIMEOUT,
-            headers={"User-Agent": cfg.REQUEST_HEADERS.get("User-Agent", "Mozilla/5.0")},
-        )
-        return r.status_code < 500
-    except Exception:
-        return False
-
-
-# ════════════════════════════════════════════════════════════
-# СЕССИЯ С ПРОКСИ + РОТАЦИЯ
-# ════════════════════════════════════════════════════════════
-
 class ProxySession:
     """
-    Обёртка над requests.Session, которая автоматически ротирует
-    прокси при ошибке соединения.
-
-    Использование:
-        ps = ProxySession()
-        resp = ps.get("https://torgi.gov.by/...")
-        soup = BeautifulSoup(resp.text, "html.parser")
+    GET-сессия с автоматической ротацией прокси.
+    При ошибке соединения переключается на следующий прокси.
+    После MAX_PROXY_RETRIES неудач бросает ProxyPoolExhausted.
     """
 
     def __init__(self):
-        self._pool: list[dict] = []
-        self._idx: int = 0
-        self._current: dict | None = None
+        self._pool:    list[dict]   = []
+        self._idx:     int          = 0
+        self._current: dict | None  = None
         self._session = requests.Session()
         self._session.headers.update(cfg.REQUEST_HEADERS)
         self._load_pool()
 
-    # ── Внутренние ────────────────────────────────────────
-
     def _load_pool(self) -> None:
         self._pool = build_pool()
         self._idx  = 0
-        if not self._pool:
-            print("[!] ProxySession: пул пуст — работаю без прокси")
+        if self._pool:
+            self._set_proxy(self._pool[0])
         else:
-            self._apply_proxy(self._pool[0])
+            print("[!] Пул пуст — прокси не используются (запрос может упасть)")
 
-    def _apply_proxy(self, p: dict) -> None:
+    def _set_proxy(self, p: dict) -> None:
         purl = _proxy_url(p)
         self._session.proxies = {"http": purl, "https": purl}
         self._current = p
 
-    def _next_proxy(self) -> None:
-        """
-        Переключает на следующий прокси.
-        Бросает ProxyPoolExhausted если список кончился.
-        """
+    def _rotate(self) -> None:
+        """Переключает на следующий прокси или бросает ProxyPoolExhausted."""
         self._idx += 1
         if self._idx >= len(self._pool):
             raise ProxyPoolExhausted(
                 f"Исчерпаны все {len(self._pool)} прокси из пула"
             )
-        self._apply_proxy(self._pool[self._idx])
-
-    # ── Публичный интерфейс ───────────────────────────────
+        self._set_proxy(self._pool[self._idx])
 
     def get(self, url: str, **kwargs) -> requests.Response:
-        """
-        GET с автоматической ротацией прокси.
-        При ConnectionError/ProxyError/Timeout/SSLError пробует следующий
-        прокси до MAX_PROXY_RETRIES раз, затем бросает ProxyPoolExhausted.
-        """
         kwargs.setdefault("timeout", PROXY_TIMEOUT)
         max_retries = getattr(cfg, "MAX_PROXY_RETRIES", 15)
 
         for attempt in range(1, max_retries + 1):
-            proxy_str = _proxy_url(self._current) if self._current else "без прокси"
+            p_str = (f"{self._current['host']}:{self._current['port']}"
+                     f" ({self._current['cc']}, {self._current['src']})"
+                     if self._current else "без прокси")
             try:
                 r = self._session.get(url, **kwargs)
                 if r.status_code < 500:
@@ -329,8 +311,8 @@ class ProxySession:
                 requests.exceptions.Timeout,
                 requests.exceptions.SSLError,
             ) as e:
-                print(f"  [✗] Прокси {proxy_str}: {type(e).__name__} ({attempt}/{max_retries})")
-                self._next_proxy()   # бросит ProxyPoolExhausted если кончились
+                print(f"  [✗] {p_str}: {type(e).__name__} ({attempt}/{max_retries})")
+                self._rotate()   # бросит ProxyPoolExhausted если кончились
             except requests.exceptions.HTTPError:
                 raise
 
@@ -338,21 +320,20 @@ class ProxySession:
             f"Не удалось выполнить запрос за {max_retries} попыток: {url}"
         )
 
-    def current_proxy_info(self) -> str:
+    def info(self) -> str:
         if self._current:
-            return f"{self._current['host']}:{self._current['port']} ({self._current['cc']}, {self._current['source']})"
+            p = self._current
+            return f"{p['host']}:{p['port']} ({p['cc']}, {p['src']})"
         return "без прокси"
 
 
-# ════════════════════════════════════════════════════════════
-# Singleton — один пул на весь процесс
-# ════════════════════════════════════════════════════════════
+# ── Singleton ─────────────────────────────────────────────
 
-_proxy_session: ProxySession | None = None
+_session: ProxySession | None = None
 
 
 def get_proxy_session() -> ProxySession:
-    global _proxy_session
-    if _proxy_session is None:
-        _proxy_session = ProxySession()
-    return _proxy_session
+    global _session
+    if _session is None:
+        _session = ProxySession()
+    return _session
