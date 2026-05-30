@@ -175,10 +175,7 @@ def _builtin_sources() -> list[dict]:
             "url":   "https://raw.githubusercontent.com/proxifly/free-proxy-list/main/proxies/countries/RU/data.txt",
             "parse": lambda t: _parse_proxifly_txt(t, "RU", "proxifly_RU"),
         },
-        {
-            "url":   "https://raw.githubusercontent.com/clarketm/proxy-list/master/proxy-list.txt",
-            "parse": _parse_clarketm,
-        },
+        
     ]
 
 
