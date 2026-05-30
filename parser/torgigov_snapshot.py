@@ -2,10 +2,9 @@
 torgigov_snapshot.py — полный слепок лотов torgi.gov.by
 
 Алгоритм:
-  1. Берём категории из torgigov_lib.TOP_CATEGORIES (хардкод, Angular SPA)
-  2. POST /torgigov/save-categories → сохраняем список в KV для бота
-  3. По каждой категории собираем первые SNAPSHOT_LOTS_LIMIT лотов
-  4. POST /torgigov/snapshot → сохраняем known_lots в KV
+  1. Парсим категории с главной страницы → POST /torgigov/save-categories
+  2. По каждой категории собираем первые SNAPSHOT_LOTS_LIMIT лотов
+  3. POST /torgigov/snapshot → сохраняем known_lots в KV
 """
 
 import os
@@ -79,11 +78,12 @@ def main() -> None:
     print("  torgi.gov.by — полный слепок")
     print("=" * 60)
 
-    # Шаг 1: категории из хардкода
-    categories = lib.TOP_CATEGORIES
-    print(f"\n[1] Категории ({len(categories)} шт. из хардкода):")
-    for c in categories:
-        print(f"    {c['label']:50s} → {c['slug']} (id={c['category_id']})")
+    # Шаг 1: парсим категории с сайта (через прокси)
+    print("\n[1] Парсю категории…")
+    categories = lib.parse_top_categories()
+    if not categories:
+        print("[!] Категории не получены — прерываю")
+        sys.exit(1)
 
     # Шаг 2: сохраняем категории в KV для бота
     print("\n[2] Сохраняю категории в KV…")
