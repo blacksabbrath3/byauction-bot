@@ -23,7 +23,6 @@ from datetime import date, datetime, timezone
 import config as cfg
 import torgigov_lib as lib
 import torgigov_snapshot as snapshot_module
-from proxy_pool import ProxyPoolExhausted
 
 WORKER_URL    = cfg.TORGIGOV_WORKER_URL
 PARSER_SECRET = cfg.PARSER_SECRET
@@ -214,18 +213,18 @@ def send_notifications(slugs: list[str]) -> None:
 # ОПОВЕЩЕНИЯ ОБ ОШИБКЕ ПРОКСИ
 # ════════════════════════════════════════════════════════════
 
-_ALERT_SUBJECT = "⚠️ torgigov: все прокси исчерпаны"
+_ALERT_SUBJECT = "⚠️ torgigov: парсер завершился с ошибкой"
 
 def _alert_message(error: str) -> str:
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     return (
         f"Парсер torgi.gov.by завершился с ошибкой:\n\n"
         f"{error}\n\n"
-        f"Все {cfg.MAX_PROXY_RETRIES} прокси из пула RU/BY оказались нерабочими.\n"
         f"Время: {ts}\n\n"
         f"Что делать:\n"
-        f"  1. Проверить доступность torgi.gov.by через RU/BY VPN\n"
-        f"  2. Добавить свежие прокси в PROXY_EXTRA_SOURCES в config.py\n"
+        f"  1. Проверить доступность torgi.gov.by через Cloudflare Worker:\n"
+        f"     POST {cfg.TORGIGOV_WORKER_URL}/fetch-page {{\"url\": \"https://torgi.gov.by/\"}}\n"
+        f"  2. Проверить деплой воркера (Actions → deploy)\n"
         f"  3. Перезапустить workflow вручную: Actions → torgigov_daily → Run workflow"
     )
 
@@ -311,6 +310,16 @@ def main() -> None:
 
     random_delay()
 
+    # Проверяем что прокси-сессия инициализировалась
+    from proxy_pool import get_proxy_session
+    ps = get_proxy_session()
+    if ps._pool:
+        print(f"[i] Рабочих прокси: {len(ps._pool)}")
+    else:
+        print("[!] Рабочих прокси нет. Для доступа к torgi.gov.by нужен")
+        print("    self-hosted GitHub Actions runner на VPS в России или Беларуси.")
+        print("    Подробнее: https://docs.github.com/en/actions/hosting-your-own-runners")
+
     # 1. Загружаем known_lots
     print("\n[1] Загружаю known_lots…")
     known_all = fetch_known_lots()
@@ -373,7 +382,7 @@ def main() -> None:
 if __name__ == "__main__":
     try:
         main()
-    except ProxyPoolExhausted as e:
+    except Exception as e:
         msg = str(e)
         print(f"\n[✗] КРИТИЧЕСКАЯ ОШИБКА: {msg}")
         send_proxy_alert(msg)
