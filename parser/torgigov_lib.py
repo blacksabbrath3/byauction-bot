@@ -1,20 +1,22 @@
 """
 torgigov_lib.py — общие функции парсера torgi.gov.by
 
+Доступ к сайту:
+  torgi.gov.by блокирует GitHub Actions IP на сетевом уровне (403 без CF-Ray).
+  Все HTTP-запросы идут через эндпоинт /fetch-page Cloudflare Worker'а,
+  который делает fetch() от имени Cloudflare edge (включая RU-точки присутствия).
+
+  get_soup(url) → POST {TORGIGOV_WORKER_URL}/fetch-page {url: "..."}
+               → Worker возвращает {ok, status, html}
+               → BeautifulSoup(html)
+
 Структура сайта:
   Каталог:   https://torgi.gov.by/catalog/{slug}/{page}/?category={id}
   Лот:       https://torgi.gov.by/lot/{lot_id}/{auction_id}/
 
-Таблицы на странице лота (серверный рендеринг):
+Таблицы на странице лота:
   .detail_lot_part1   — Наименование, Категория, Регион, Местонахождение
   .detail_lot_part2   — Начальная цена единицы
-
-Навигация категорий на главной:
-  <nav class="main_category"> — прямые дочерние <a> (не в .main_category_mnu_sub_item)
-  <div id="mm-1"> ul.mm-listview > li без класса  — мобильное меню (резерв)
-
-HTTP: все запросы идут через ProxySession из proxy_pool.py, которая
-автоматически ротирует RU/BY прокси при недоступности.
 """
 
 import re
@@ -25,35 +27,71 @@ from bs4 import BeautifulSoup
 from urllib.parse import urljoin, unquote
 
 import config as cfg
-from proxy_pool import get_proxy_session
 
 BASE_URL = "https://torgi.gov.by"
 
 # Шаблон URL лота: /lot/{lot_id}/{auction_id}/
 _LOT_URL_RE = re.compile(r"^/lot/(\d+)/(\d+)/$")
 
+# Сессия для запросов к Worker'у (не к torgi.gov.by напрямую)
+_SESSION = requests.Session()
+_SESSION.headers.update({"Content-Type": "application/json"})
+
 
 # ════════════════════════════════════════════════════════════
-# HTTP — все запросы через ProxySession
+# HTTP — все запросы к torgi.gov.by идут через Worker /fetch-page
 # ════════════════════════════════════════════════════════════
+
+class WorkerFetchError(Exception):
+    """Worker недоступен или вернул ошибку при попытке достучаться до torgi.gov.by."""
+
 
 def get_soup(url: str) -> BeautifulSoup | None:
-    session = get_proxy_session()
+    """
+    Получает HTML страницы через Cloudflare Worker /fetch-page.
+    При сетевых ошибках повторяет REQUEST_RETRIES раз.
+    Возвращает BeautifulSoup или None при ошибке.
+    """
+    worker_url = f"{cfg.TORGIGOV_WORKER_URL}/fetch-page"
+
     for attempt in range(1, cfg.REQUEST_RETRIES + 1):
         try:
-            r = session.get(url)   # таймаут и ротация прокси внутри ProxySession
+            r = _SESSION.post(
+                worker_url,
+                json={"url": url},
+                headers={"X-API-Key": cfg.PARSER_SECRET},
+                timeout=cfg.REQUEST_TIMEOUT,
+            )
             r.raise_for_status()
-            return BeautifulSoup(r.text, "html.parser")
-        except RuntimeError as e:
-            # Все прокси исчерпаны
-            print(f"  [✗] ProxySession: {e}")
-            return None
+            data = r.json()
+
+            if not data.get("ok"):
+                err = data.get("error", "unknown")
+                print(f"  [!] Worker /fetch-page error: {err} (url={url})")
+                # Worker вернул ответ, но сам получил ошибку от torgi.gov.by
+                if attempt < cfg.REQUEST_RETRIES:
+                    time.sleep(cfg.RETRY_BASE_DELAY * attempt)
+                    continue
+                return None
+
+            status = data.get("status", 0)
+            if status == 403:
+                print(f"  [!] torgi.gov.by вернул 403 даже через Worker — сайт недоступен")
+                return None
+            if status >= 500:
+                print(f"  [!] torgi.gov.by вернул {status}, попытка {attempt}/{cfg.REQUEST_RETRIES}")
+                if attempt < cfg.REQUEST_RETRIES:
+                    time.sleep(cfg.RETRY_BASE_DELAY * attempt)
+                    continue
+                return None
+
+            return BeautifulSoup(data["html"], "html.parser")
+
         except requests.RequestException as e:
-            wait = cfg.RETRY_BASE_DELAY * attempt
-            print(f"  [!] Попытка {attempt}/{cfg.REQUEST_RETRIES}: {e}")
+            print(f"  [!] Ошибка связи с Worker ({attempt}/{cfg.REQUEST_RETRIES}): {e}")
             if attempt < cfg.REQUEST_RETRIES:
-                print(f"      Жду {wait:.0f}с…")
-                time.sleep(wait)
+                time.sleep(cfg.RETRY_BASE_DELAY * attempt)
+
     return None
 
 
@@ -69,11 +107,8 @@ def _clean(text: str) -> str:
 
 # ════════════════════════════════════════════════════════════
 # ПАРСИНГ КАТЕГОРИЙ
-# Раз в месяц: парсим главную, сохраняем в KV, берём из KV в дейли.
-# Три стратегии: nav.main_category → mm-1 → TOP_IDS fallback.
 # ════════════════════════════════════════════════════════════
 
-# Резервные категории (используются только если парсинг полностью упал)
 _FALLBACK_CATEGORIES = [
     {"slug": "nedvizhimost",          "label": "Недвижимость",           "category_id": 1},
     {"slug": "transport-i-zapchasti", "label": "Транспорт и запчасти",   "category_id": 2},
@@ -96,12 +131,8 @@ _CAT_PAT = re.compile(r"/catalog/([a-z0-9-]+)/1/\?category=(\d+)")
 
 def parse_top_categories() -> list[dict]:
     """
-    Парсит верхнеуровневые категории.
-    Стратегии (в порядке надёжности):
-      1. nav.main_category — прямые <a>, не вложенные в .main_category_mnu_sub_item
-      2. div#mm-1 > ul.mm-listview > li без класса
-      3. Фильтр по _TOP_IDS — последний резерв
-      4. _FALLBACK_CATEGORIES — если сайт полностью недоступен
+    Парсит верхнеуровневые категории с главной страницы через Worker.
+    При недоступности возвращает _FALLBACK_CATEGORIES.
     """
     print("[→] Парсю категории torgi.gov.by…")
     soup = get_soup(BASE_URL + "/")
@@ -160,7 +191,6 @@ def parse_top_categories() -> list[dict]:
                 add(m.group(1), int(m.group(2)), _clean(a.get_text()))
         print(f"  [i] Стратегия 3 (TOP_IDS): {len(categories)} категорий")
 
-    # Стратегия 4: fallback
     if not categories:
         print("[!] Все стратегии не дали результат — использую резервные категории")
         return list(_FALLBACK_CATEGORIES)
@@ -244,7 +274,6 @@ def find_new_lots(
 
     while i < n:
         path = daily_paths[i]
-
         if path not in snapshot:
             new_paths.append(path)
             i += 1
@@ -327,8 +356,7 @@ def _extract_price(soup: BeautifulSoup) -> str:
                 num_str = m.group(1).replace(" ", "").replace(",", ".")
                 try:
                     num = float(num_str)
-                    formatted = f"{num:,.2f}".replace(",", " ")
-                    return f"{formatted} BYN"
+                    return f"{num:,.2f}".replace(",", " ") + " BYN"
                 except ValueError:
                     pass
             return raw
@@ -350,9 +378,7 @@ def parse_lot_details(stored: str) -> dict:
     if soup is None:
         empty["title"] = stored
         return empty
-
     d = dict(empty)
-    part1 = _extract_table_part1(soup)
-    d.update(part1)
+    d.update(_extract_table_part1(soup))
     d["price"] = _extract_price(soup)
     return d
