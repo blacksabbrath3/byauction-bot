@@ -291,7 +291,7 @@ class ProxySession:
 
     def get(self, url: str, **kwargs) -> requests.Response:
         kwargs.setdefault("timeout", PROXY_TIMEOUT)
-        max_retries = getattr(cfg, "MAX_PROXY_RETRIES", 15)
+        max_retries = getattr(cfg, "MAX_PROXY_RETRIES", 19)
 
         for attempt in range(1, max_retries + 1):
             p_str = (f"{self._current['host']}:{self._current['port']}"
