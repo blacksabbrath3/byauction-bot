@@ -151,3 +151,36 @@ TORGIGOV_BASE_URL = "https://torgi.gov.by"
 # top-level category_id на torgi.gov.by (1–13, 164, 167)
 # Перечислены для справки; реальный список хранится в KV и берётся оттуда.
 TORGIGOV_TOP_LEVEL_CATEGORY_IDS = list(range(1, 14)) + [164, 167]
+
+# ════════════════════════════════════════════════════════════
+# ПРОКСИ — настройки для proxy_pool.py
+# ════════════════════════════════════════════════════════════
+
+# Максимум попыток смены прокси на один HTTP-запрос
+MAX_PROXY_RETRIES = int(os.environ.get("MAX_PROXY_RETRIES", "15"))
+
+# Дополнительные источники прокси (добавлять при необходимости).
+# Формат каждой строки: "тип|URL"
+# Типы:
+#   roosterkid   — формат: FLAG IP:PORT Xms CC [ISP]  (страна читается из строки)
+#   ipport_RU    — голые IP:PORT, все считаются российскими
+#   ipport_BY    — голые IP:PORT, все считаются белорусскими
+#   proxifly_json — JSON proxifly с полем geolocation.country
+#
+# Пример:
+#   PROXY_EXTRA_SOURCES = [
+#       "roosterkid|https://raw.githubusercontent.com/example/list/main/proxy.txt",
+#       "ipport_RU|https://example.com/ru_proxies.txt",
+#   ]
+PROXY_EXTRA_SOURCES: list[str] = []
+
+# ════════════════════════════════════════════════════════════
+# ОПОВЕЩЕНИЯ ОБ ОШИБКАХ (прокси исчерпаны и т.п.)
+# ════════════════════════════════════════════════════════════
+
+# Email для алертов
+ALERT_EMAIL = os.environ.get("ALERT_EMAIL", "blacksabbrath@gmail.com")
+
+# Telegram chat_id для алертов (id администратора/группы)
+# Установить через GitHub Secret ALERT_TELEGRAM_CHAT_ID
+ALERT_TELEGRAM_CHAT_ID = os.environ.get("ALERT_TELEGRAM_CHAT_ID", "")

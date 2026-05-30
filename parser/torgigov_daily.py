@@ -14,12 +14,15 @@ torgigov_daily.py — ежедневный парсер новых лотов to
 import os
 import sys
 import time
+import smtplib
 import requests
+from email.mime.text import MIMEText
 from datetime import date, datetime, timezone
 
 import config as cfg
 import torgigov_lib as lib
 import torgigov_snapshot as snapshot_module
+from proxy_pool import ProxyPoolExhausted
 
 WORKER_URL    = cfg.TORGIGOV_WORKER_URL
 PARSER_SECRET = cfg.PARSER_SECRET
@@ -207,6 +210,86 @@ def send_notifications(slugs: list[str]) -> None:
 
 
 # ════════════════════════════════════════════════════════════
+# ОПОВЕЩЕНИЯ ОБ ОШИБКЕ ПРОКСИ
+# ════════════════════════════════════════════════════════════
+
+_ALERT_SUBJECT = "⚠️ torgigov: все прокси исчерпаны"
+
+def _alert_message(error: str) -> str:
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    return (
+        f"Парсер torgi.gov.by завершился с ошибкой:\n\n"
+        f"{error}\n\n"
+        f"Все {cfg.MAX_PROXY_RETRIES} прокси из пула RU/BY оказались нерабочими.\n"
+        f"Время: {ts}\n\n"
+        f"Что делать:\n"
+        f"  1. Проверить доступность torgi.gov.by через RU/BY VPN\n"
+        f"  2. Добавить свежие прокси в PROXY_EXTRA_SOURCES в config.py\n"
+        f"  3. Перезапустить workflow вручную: Actions → torgigov_daily → Run workflow"
+    )
+
+
+def send_alert_email(error: str) -> None:
+    """Отправляет письмо через SMTP. Настройки берутся из env/config."""
+    to_addr  = getattr(cfg, "ALERT_EMAIL", "blacksabbrath@gmail.com")
+    smtp_host = os.environ.get("ALERT_SMTP_HOST", "smtp.gmail.com")
+    smtp_port = int(os.environ.get("ALERT_SMTP_PORT", "587"))
+    smtp_user = os.environ.get("ALERT_SMTP_USER", "")
+    smtp_pass = os.environ.get("ALERT_SMTP_PASS", "")
+
+    if not smtp_user or not smtp_pass:
+        print(f"  [!] Email: ALERT_SMTP_USER / ALERT_SMTP_PASS не заданы — письмо не отправлено")
+        return
+
+    msg = MIMEText(_alert_message(error), "plain", "utf-8")
+    msg["Subject"] = _ALERT_SUBJECT
+    msg["From"]    = smtp_user
+    msg["To"]      = to_addr
+
+    try:
+        with smtplib.SMTP(smtp_host, smtp_port, timeout=20) as s:
+            s.ehlo()
+            s.starttls()
+            s.login(smtp_user, smtp_pass)
+            s.sendmail(smtp_user, [to_addr], msg.as_string())
+        print(f"  [✓] Email отправлен → {to_addr}")
+    except Exception as e:
+        print(f"  [✗] Email не отправлен: {e}")
+
+
+def send_alert_telegram(error: str) -> None:
+    """Отправляет сообщение в Telegram через Bot API."""
+    bot_token = os.environ.get("BOT_TOKEN", getattr(cfg, "BOT_TOKEN", ""))
+    chat_id   = os.environ.get("ALERT_TELEGRAM_CHAT_ID",
+                               getattr(cfg, "ALERT_TELEGRAM_CHAT_ID", ""))
+
+    if not bot_token or not chat_id:
+        print(f"  [!] Telegram: BOT_TOKEN / ALERT_TELEGRAM_CHAT_ID не заданы")
+        return
+
+    text = f"<b>{_ALERT_SUBJECT}</b>\n\n" + _alert_message(error).replace("&", "&amp;").replace("<", "&lt;")
+    try:
+        r = requests.post(
+            f"https://api.telegram.org/bot{bot_token}/sendMessage",
+            json={"chat_id": chat_id, "text": text, "parse_mode": "HTML"},
+            timeout=20,
+        )
+        if r.ok:
+            print(f"  [✓] Telegram уведомление отправлено → chat_id={chat_id}")
+        else:
+            print(f"  [✗] Telegram API: {r.status_code} {r.text[:200]}")
+    except Exception as e:
+        print(f"  [✗] Telegram не отправлен: {e}")
+
+
+def send_proxy_alert(error: str) -> None:
+    """Отправляет уведомление всеми доступными каналами."""
+    print("\n[⚠] Отправляю оповещение об исчерпании прокси…")
+    send_alert_email(error)
+    send_alert_telegram(error)
+
+
+# ════════════════════════════════════════════════════════════
 # ТОЧКА ВХОДА
 # ════════════════════════════════════════════════════════════
 
@@ -280,4 +363,10 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except ProxyPoolExhausted as e:
+        msg = str(e)
+        print(f"\n[✗] КРИТИЧЕСКАЯ ОШИБКА: {msg}")
+        send_proxy_alert(msg)
+        sys.exit(1)

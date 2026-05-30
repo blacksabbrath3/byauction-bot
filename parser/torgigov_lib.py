@@ -5,14 +5,16 @@ torgigov_lib.py — общие функции парсера torgi.gov.by
   Каталог:   https://torgi.gov.by/catalog/{slug}/{page}/?category={id}
   Лот:       https://torgi.gov.by/lot/{lot_id}/{auction_id}/
 
-Важно: сайт — Angular SPA. Живой сервер отдаёт почти пустой HTML,
-весь контент (включая меню категорий) рендерится JavaScript'ом.
-Категории поэтому хардкодируются в TOP_CATEGORIES и обновляются
-вручную при изменении структуры сайта.
-
-Таблицы на странице лота (серверный рендеринг, парсится нормально):
+Таблицы на странице лота (серверный рендеринг):
   .detail_lot_part1   — Наименование, Категория, Регион, Местонахождение
   .detail_lot_part2   — Начальная цена единицы
+
+Навигация категорий на главной:
+  <nav class="main_category"> — прямые дочерние <a> (не в .main_category_mnu_sub_item)
+  <div id="mm-1"> ul.mm-listview > li без класса  — мобильное меню (резерв)
+
+HTTP: все запросы идут через ProxySession из proxy_pool.py, которая
+автоматически ротирует RU/BY прокси при недоступности.
 """
 
 import re
@@ -23,48 +25,29 @@ from bs4 import BeautifulSoup
 from urllib.parse import urljoin, unquote
 
 import config as cfg
+from proxy_pool import get_proxy_session
 
 BASE_URL = "https://torgi.gov.by"
-
-# ════════════════════════════════════════════════════════════
-# TOP-LEVEL КАТЕГОРИИ — хардкод из реального меню сайта
-# (сайт Angular SPA, категории не доступны через парсинг)
-# Обновлять вручную при изменении структуры меню.
-# Источник: div.mm-panels > div#mm-1 > ul.mm-listview > li > a[href]
-# ════════════════════════════════════════════════════════════
-TOP_CATEGORIES = [
-    {"slug": "nedvizhimost",          "label": "Недвижимость",           "category_id": 1},
-    {"slug": "transport-i-zapchasti", "label": "Транспорт и запчасти",   "category_id": 2},
-    {"slug": "oborudovanie",          "label": "Оборудование",           "category_id": 3},
-    {"slug": "komp-yutery",           "label": "Компьютеры",             "category_id": 4},
-    {"slug": "telefony-i-svyaz",      "label": "Телефоны и связь",       "category_id": 5},
-    {"slug": "mebel-i-inter-er",      "label": "Мебель и интерьер",      "category_id": 6},
-    {"slug": "produkty-pitaniya",     "label": "Продукты питания",       "category_id": 7},
-    {"slug": "tehnika-v-bytu",        "label": "Техника в быту",         "category_id": 8},
-    {"slug": "odezhda-obuv-i-dr",     "label": "Одежда, обувь и др.",    "category_id": 9},
-    {"slug": "stroitel-stvo",         "label": "Строительство",          "category_id": 10},
-    {"slug": "nematerial-nye",        "label": "Нематериальные",         "category_id": 11},
-    {"slug": "pravo-arendy-i-uslugi", "label": "Право аренды и услуги",  "category_id": 167},
-    {"slug": "zhivotnye-i-rasteniya", "label": "Животные и растения",    "category_id": 164},
-]
 
 # Шаблон URL лота: /lot/{lot_id}/{auction_id}/
 _LOT_URL_RE = re.compile(r"^/lot/(\d+)/(\d+)/$")
 
-SESSION = requests.Session()
-SESSION.headers.update(cfg.REQUEST_HEADERS)
-
 
 # ════════════════════════════════════════════════════════════
-# HTTP
+# HTTP — все запросы через ProxySession
 # ════════════════════════════════════════════════════════════
 
 def get_soup(url: str) -> BeautifulSoup | None:
+    session = get_proxy_session()
     for attempt in range(1, cfg.REQUEST_RETRIES + 1):
         try:
-            r = SESSION.get(url, timeout=cfg.REQUEST_TIMEOUT)
+            r = session.get(url)   # таймаут и ротация прокси внутри ProxySession
             r.raise_for_status()
             return BeautifulSoup(r.text, "html.parser")
+        except RuntimeError as e:
+            # Все прокси исчерпаны
+            print(f"  [✗] ProxySession: {e}")
+            return None
         except requests.RequestException as e:
             wait = cfg.RETRY_BASE_DELAY * attempt
             print(f"  [!] Попытка {attempt}/{cfg.REQUEST_RETRIES}: {e}")
@@ -85,14 +68,115 @@ def _clean(text: str) -> str:
 
 
 # ════════════════════════════════════════════════════════════
+# ПАРСИНГ КАТЕГОРИЙ
+# Раз в месяц: парсим главную, сохраняем в KV, берём из KV в дейли.
+# Три стратегии: nav.main_category → mm-1 → TOP_IDS fallback.
+# ════════════════════════════════════════════════════════════
+
+# Резервные категории (используются только если парсинг полностью упал)
+_FALLBACK_CATEGORIES = [
+    {"slug": "nedvizhimost",          "label": "Недвижимость",           "category_id": 1},
+    {"slug": "transport-i-zapchasti", "label": "Транспорт и запчасти",   "category_id": 2},
+    {"slug": "oborudovanie",          "label": "Оборудование",           "category_id": 3},
+    {"slug": "komp-yutery",           "label": "Компьютеры",             "category_id": 4},
+    {"slug": "telefony-i-svyaz",      "label": "Телефоны и связь",       "category_id": 5},
+    {"slug": "mebel-i-inter-er",      "label": "Мебель и интерьер",      "category_id": 6},
+    {"slug": "produkty-pitaniya",     "label": "Продукты питания",       "category_id": 7},
+    {"slug": "tehnika-v-bytu",        "label": "Техника в быту",         "category_id": 8},
+    {"slug": "odezhda-obuv-i-dr",     "label": "Одежда, обувь и др.",    "category_id": 9},
+    {"slug": "stroitel-stvo",         "label": "Строительство",          "category_id": 10},
+    {"slug": "nematerial-nye",        "label": "Нематериальные",         "category_id": 11},
+    {"slug": "pravo-arendy-i-uslugi", "label": "Право аренды и услуги",  "category_id": 167},
+    {"slug": "zhivotnye-i-rasteniya", "label": "Животные и растения",    "category_id": 164},
+]
+
+_TOP_IDS = set(range(1, 14)) | {164, 167}
+_CAT_PAT = re.compile(r"/catalog/([a-z0-9-]+)/1/\?category=(\d+)")
+
+
+def parse_top_categories() -> list[dict]:
+    """
+    Парсит верхнеуровневые категории.
+    Стратегии (в порядке надёжности):
+      1. nav.main_category — прямые <a>, не вложенные в .main_category_mnu_sub_item
+      2. div#mm-1 > ul.mm-listview > li без класса
+      3. Фильтр по _TOP_IDS — последний резерв
+      4. _FALLBACK_CATEGORIES — если сайт полностью недоступен
+    """
+    print("[→] Парсю категории torgi.gov.by…")
+    soup = get_soup(BASE_URL + "/")
+    if soup is None:
+        print("[!] Главная недоступна — использую резервные категории")
+        return list(_FALLBACK_CATEGORIES)
+
+    seen: set[tuple] = set()
+    categories: list[dict] = []
+
+    def add(slug: str, cat_id: int, label: str) -> None:
+        label = re.sub(r"\s*\d+\s*$", "", label).strip()
+        label = re.sub(r"\s*\(\d+\)\s*$", "", label).strip()
+        if not label or len(label) > 120:
+            return
+        key = (slug, cat_id)
+        if key not in seen:
+            seen.add(key)
+            categories.append({"slug": slug, "label": label, "category_id": cat_id})
+
+    # Стратегия 1: nav.main_category
+    nav = soup.find("nav", class_="main_category")
+    if nav:
+        for a in nav.find_all("a", href=True):
+            if a.find_parent("li", class_="main_category_mnu_sub_item"):
+                continue
+            if a.find_parent("ul", class_="main_category_mnu_sub"):
+                continue
+            m = _CAT_PAT.search(unquote(a["href"]))
+            if m:
+                add(m.group(1), int(m.group(2)), _clean(a.get_text()))
+    print(f"  [i] Стратегия 1 (nav.main_category): {len(categories)} категорий")
+
+    # Стратегия 2: мобильное меню div#mm-1
+    if not categories:
+        mm1 = soup.find("div", id="mm-1")
+        if mm1:
+            ul = mm1.find("ul", class_="mm-listview")
+            if ul:
+                for li in ul.find_all("li", recursive=False):
+                    if li.get("class"):
+                        continue
+                    a = li.find("a", href=True)
+                    if not a:
+                        continue
+                    m = _CAT_PAT.search(unquote(a["href"]))
+                    if m:
+                        add(m.group(1), int(m.group(2)), _clean(a.get_text()))
+        print(f"  [i] Стратегия 2 (mm-1): {len(categories)} категорий")
+
+    # Стратегия 3: фильтр по TOP_IDS
+    if not categories:
+        for a in soup.find_all("a", href=True):
+            m = _CAT_PAT.search(unquote(a["href"]))
+            if m and int(m.group(2)) in _TOP_IDS:
+                add(m.group(1), int(m.group(2)), _clean(a.get_text()))
+        print(f"  [i] Стратегия 3 (TOP_IDS): {len(categories)} категорий")
+
+    # Стратегия 4: fallback
+    if not categories:
+        print("[!] Все стратегии не дали результат — использую резервные категории")
+        return list(_FALLBACK_CATEGORIES)
+
+    print(f"[✓] Категорий top-level: {len(categories)}")
+    for c in categories:
+        print(f"    {c['label']:50s} → {c['slug']} (id={c['category_id']})")
+    return categories
+
+
+# ════════════════════════════════════════════════════════════
 # КАТАЛОГ — СПИСОК ЛОТОВ
 # ════════════════════════════════════════════════════════════
 
 def extract_lot_urls(soup: BeautifulSoup) -> list[str]:
-    """
-    Извлекает stored-URL лотов со страницы каталога.
-    Stored-формат: "torgi.gov.by/lot/{lot_id}/{auction_id}/"
-    """
+    """Stored-формат: "torgi.gov.by/lot/{lot_id}/{auction_id}/" """
     urls, seen = [], set()
     for a in soup.find_all("a", href=True):
         href = unquote(a["href"])
@@ -119,12 +203,11 @@ def build_catalog_url(slug: str, category_id: int, page: int = 1) -> str:
 
 
 def get_next_page_url(soup: BeautifulSoup, current_url: str) -> str | None:
-    """Ищет ссылку на следующую страницу в пагинации."""
     m = re.search(r"/catalog/[^/]+/(\d+)/", current_url)
     cur = int(m.group(1)) if m else 1
 
     for a in soup.find_all("a", href=True):
-        cls = " ".join(a.get("class", []))
+        cls  = " ".join(a.get("class", []))
         text = a.get_text(strip=True)
         href = unquote(a["href"])
         if any(x in cls for x in ["next", "forward"]) or text in (">", "»", "Следующая"):
@@ -141,7 +224,7 @@ def get_next_page_url(soup: BeautifulSoup, current_url: str) -> str | None:
 
 
 # ════════════════════════════════════════════════════════════
-# АЛГОРИТМ НОВЫХ ЛОТОВ (аналог lib.find_new_lots)
+# АЛГОРИТМ НОВЫХ ЛОТОВ
 # ════════════════════════════════════════════════════════════
 
 def find_new_lots(
@@ -207,10 +290,6 @@ def stored_to_url(stored: str) -> str:
 
 
 def _extract_table_part1(soup: BeautifulSoup) -> dict:
-    """
-    .detail_lot_part1 — Общие сведения о лоте.
-    Поля: Наименование, Категория, Регион, Местонахождение имущества.
-    """
     result = {"title": "", "category": "", "region": "", "location": ""}
     table = soup.find("table", class_="detail_lot_part1")
     if not table:
@@ -233,10 +312,6 @@ def _extract_table_part1(soup: BeautifulSoup) -> dict:
 
 
 def _extract_price(soup: BeautifulSoup) -> str:
-    """
-    .detail_lot_part2 — строка «Начальная цена единицы».
-    "12 000.00 Руб(с НДС)" → "12 000.00 BYN"
-    """
     table = soup.find("table", class_="detail_lot_part2")
     if not table:
         return ""
@@ -261,11 +336,6 @@ def _extract_price(soup: BeautifulSoup) -> str:
 
 
 def parse_lot_details(stored: str) -> dict:
-    """
-    Парсит страницу лота.
-    Принимает stored-путь: "torgi.gov.by/lot/110430/33161/"
-    Возвращает dict: url, lot_id, title, category, region, location, price.
-    """
     url = stored_to_url(stored)
     empty = {
         "url":      url,

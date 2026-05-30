@@ -24,11 +24,19 @@ jobs:
 
       - name: Install dependencies
         run: pip install requests beautifulsoup4
+        # proxy_pool.py uses: requests, re, json, ipaddress (все stdlib кроме requests)
 
       - name: Run parser
         env:
           TORGIGOV_WORKER_URL: ${{ secrets.TORGIGOV_WORKER_URL }}
           PARSER_SECRET:       ${{ secrets.PARSER_SECRET }}
           SKIP_RANDOM_DELAY:   ${{ github.event_name == 'workflow_dispatch' && 'true' || 'false' }}
+          BOT_TOKEN:           ${{ secrets.BOT_TOKEN }}
+          ALERT_TELEGRAM_CHAT_ID: ${{ secrets.ALERT_TELEGRAM_CHAT_ID }}
+          ALERT_EMAIL:         ${{ secrets.ALERT_EMAIL }}
+          ALERT_SMTP_HOST:     ${{ secrets.ALERT_SMTP_HOST }}
+          ALERT_SMTP_PORT:     ${{ secrets.ALERT_SMTP_PORT }}
+          ALERT_SMTP_USER:     ${{ secrets.ALERT_SMTP_USER }}
+          ALERT_SMTP_PASS:     ${{ secrets.ALERT_SMTP_PASS }}
         working-directory: parser
         run: python torgigov_daily.py
