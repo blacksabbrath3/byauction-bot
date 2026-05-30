@@ -2,9 +2,10 @@
 torgigov_snapshot.py — полный слепок лотов torgi.gov.by
 
 Алгоритм:
-  1. Парсим категории с главной страницы → POST /torgigov/save-categories
-  2. По каждой категории собираем первые SNAPSHOT_LOTS_LIMIT лотов
-  3. POST /torgigov/snapshot → сохраняем known_lots в KV
+  1. Парсим категории с главной страницы → POST /save-categories
+  2. По каждой категории запрашиваем все страницы через API
+     GET {WORKER}/api-lots?category={id}&page={n}&pagesize=50
+  3. Собираем lot_id → POST /snapshot
 """
 
 import os
@@ -19,57 +20,62 @@ WORKER_URL    = cfg.TORGIGOV_WORKER_URL
 PARSER_SECRET = cfg.PARSER_SECRET
 
 
+def _post(path: str, body: dict) -> dict:
+    r = requests.post(
+        f"{WORKER_URL}/{path}",
+        json=body,
+        headers={"X-API-Key": PARSER_SECRET, "Content-Type": "application/json"},
+        timeout=60,
+    )
+    r.raise_for_status()
+    return r.json()
+
+
 def save_categories(categories: list[dict]) -> None:
     try:
-        r = requests.post(
-            f"{WORKER_URL}/save-categories",
-            json={"categories": categories},
-            headers={"X-API-Key": PARSER_SECRET},
-            timeout=30,
-        )
-        r.raise_for_status()
-        print(f"  [✓] /save-categories: {r.text[:120]}")
-    except requests.RequestException as e:
+        r = _post("save-categories", {"categories": categories})
+        print(f"  [✓] /save-categories: {r}")
+    except Exception as e:
         print(f"  [✗] /save-categories: {e}")
 
 
 def snapshot_category(cat: dict) -> list[str]:
-    """Собирает до SNAPSHOT_LOTS_LIMIT stored-URL лотов категории."""
+    """Собирает все lot_id категории через API."""
     slug   = cat["slug"]
     cat_id = cat["category_id"]
     label  = cat["label"]
-    print(f"\n  [+] Слепок: {label} (slug={slug}, id={cat_id})")
+    print(f"\n  [+] Слепок: {label} (id={cat_id})")
 
-    all_paths: list[str] = []
-    page = 1
+    all_ids: list[str] = []
+    pagesize = cfg.SNAPSHOT_PAGE_SIZE
+    page     = 0
 
-    while len(all_paths) < cfg.SNAPSHOT_LOTS_LIMIT:
-        url = lib.build_catalog_url(slug, cat_id, page)
-        print(f"      → стр. {page}: {url}")
-        soup = lib.get_soup(url)
-        if soup is None:
-            print("      [!] Пропуск страницы")
+    while True:
+        print(f"      → стр. {page}: category={cat_id} pagesize={pagesize}")
+        lots, total_pages = lib.fetch_lots_page(cat_id, slug, page=page, pagesize=pagesize)
+
+        if not lots:
+            if page == 0:
+                print(f"      [!] Страница 0 пуста — возможно категория пустая или API недоступен")
             break
 
-        found = lib.extract_lot_urls(soup)
-        print(f"         лотов: {len(found)}")
-        if not found:
+        for lot in lots:
+            if lot["lot_id"] and lot["lot_id"] not in all_ids:
+                all_ids.append(lot["lot_id"])
+
+        print(f"         лотов: {len(lots)}, всего страниц: {total_pages}, собрано ID: {len(all_ids)}")
+
+        if page + 1 >= total_pages:
             break
-
-        for p in found:
-            if p not in all_paths:
-                all_paths.append(p)
-            if len(all_paths) >= cfg.SNAPSHOT_LOTS_LIMIT:
-                break
-
-        if lib.get_next_page_url(soup, url) is None:
+        if len(all_ids) >= cfg.SNAPSHOT_LOTS_LIMIT:
+            print(f"      [i] Достигнут лимит {cfg.SNAPSHOT_LOTS_LIMIT}, останавливаю")
             break
 
         page += 1
         lib.pause(cfg.DELAY_BETWEEN_LIST_PAGES)
 
-    print(f"      Итого: {len(all_paths)} лотов")
-    return all_paths
+    print(f"      Итого: {len(all_ids)} лотов")
+    return all_ids
 
 
 def main() -> None:
@@ -77,37 +83,27 @@ def main() -> None:
     print("  torgi.gov.by — полный слепок")
     print("=" * 60)
 
-    # Шаг 1: парсим категории с сайта (через прокси)
     print("\n[1] Парсю категории…")
     categories = lib.parse_top_categories()
     if not categories:
         print("[!] Категории не получены — прерываю")
         sys.exit(1)
 
-    # Шаг 2: сохраняем категории в KV для бота
     print("\n[2] Сохраняю категории в KV…")
     save_categories(categories)
 
-    # Шаг 3: слепок лотов по категориям
     print("\n[3] Собираю слепок лотов…")
     snapshot: dict[str, list[str]] = {}
     for cat in categories:
-        paths = snapshot_category(cat)
-        snapshot[cat["slug"]] = paths
+        ids = snapshot_category(cat)
+        snapshot[cat["slug"]] = ids
         lib.pause(cfg.DELAY_BETWEEN_SECTIONS)
 
-    # Шаг 4: сохраняем снапшот
     print("\n[4] Сохраняю снапшот…")
     try:
-        r = requests.post(
-            f"{WORKER_URL}/snapshot",
-            json={"snapshot": snapshot},
-            headers={"X-API-Key": PARSER_SECRET},
-            timeout=60,
-        )
-        r.raise_for_status()
-        print(f"  [✓] /snapshot: {r.text[:120]}")
-    except requests.RequestException as e:
+        r = _post("snapshot", {"snapshot": snapshot})
+        print(f"  [✓] /snapshot: {r}")
+    except Exception as e:
         print(f"  [✗] /snapshot: {e}")
         sys.exit(1)
 
