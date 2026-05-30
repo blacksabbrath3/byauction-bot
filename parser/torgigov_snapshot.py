@@ -14,7 +14,6 @@ from datetime import datetime, timezone
 
 import config as cfg
 import torgigov_lib as lib
-from proxy_pool import ProxyPoolExhausted
 
 WORKER_URL    = cfg.TORGIGOV_WORKER_URL
 PARSER_SECRET = cfg.PARSER_SECRET
@@ -122,7 +121,6 @@ def main() -> None:
 if __name__ == "__main__":
     try:
         main()
-    except ProxyPoolExhausted as e:
-        print(f"\n[✗] КРИТИЧЕСКАЯ ОШИБКА: все прокси исчерпаны: {e}")
-        print("    Добавьте свежие прокси в PROXY_EXTRA_SOURCES в config.py")
+    except Exception as e:
+        print(f"\n[✗] КРИТИЧЕСКАЯ ОШИБКА: {e}")
         sys.exit(1)
