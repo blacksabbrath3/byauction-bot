@@ -1,42 +1,49 @@
 // ============================================================
-// workers/torgigov/index.js — API для парсера torgi.gov.by
+// workers/torgigov/index.js
 //
-// Bindings (Cloudflare Worker Settings):
-//   KV:      TORGIGOV_STORAGE → torgigov_storage
-//            SUBSCRIBERS      → bot_subscribers
+// Bindings:
+//   KV:      TORGIGOV_STORAGE, SUBSCRIBERS
 //   Secrets: BOT_TOKEN, PARSER_SECRET
 //
 // Endpoints:
-//   GET  /known-lots          → {slug: [path, ...]}
-//   GET  /categories          → [{slug, label, category_id}, ...]
-//   GET  /status              → {last_full_reset, snapshot_ts, current_time}
-//   POST /snapshot            → {snapshot: {slug: [path, ...]}}
-//   POST /save-categories     → {categories: [...]}
-//   POST /add-lots            → {slug, paths: [...]}
-//   POST /save-daily-lots     → {date, slug, lots: [...], ttl}
-//   POST /send-notifications  → {date, slug}
-//   POST /fetch-page          → {url} → {ok, status, html}
-//     Ретранслятор: Worker делает fetch() от имени Cloudflare edge,
-//     который имеет доступ к torgi.gov.by в отличие от GitHub Actions IP.
+//   GET  /known-lots           → {slug: [lotId, ...]}
+//   GET  /categories           → [{slug, label, category_id}, ...]
+//   GET  /status               → {last_full_reset, snapshot_ts}
+//   POST /snapshot             → {snapshot: {slug: [lotId, ...]}}
+//   POST /save-categories      → {categories: [...]}
+//   POST /add-lots             → {slug, lot_ids: [...]}
+//   POST /save-daily-lots      → {date, slug, lots: [...], ttl}
+//   POST /send-notifications   → {date, slug}
+//   POST /fetch-page           → {url} → {ok, status, html}
+//       Для парсинга главной страницы и страниц лотов (SSR).
+//   GET  /api-lots?category=1&page=0&pagesize=50
+//       Проксирует GET к api.torgi.gov.by/api/lots — недоступен с GitHub IP.
 // ============================================================
 
-import { matchKeywords }                        from "../../shared/matchKeyword.js";
-import { sendNotifications }                    from "../../shared/subscribers.js";
-import { escapeHtml, jsonResponse, checkAuth }  from "../../shared/format.js";
+import { matchKeywords }                       from "../../shared/matchKeyword.js";
+import { sendNotifications }                   from "../../shared/subscribers.js";
+import { escapeHtml, jsonResponse, checkAuth } from "../../shared/format.js";
 
-// ── Регионы Беларуси для нормализации ────────────────────────
+// ── Константы ──────────────────────────────────────────────
+
+const TORGI_API   = "https://api.torgi.gov.by/api";
+const TORGI_SITE  = "https://torgi.gov.by";
+
+const API_HEADERS = {
+  "User-Agent":  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+  "Accept":      "application/json, text/plain, */*",
+  "Referer":     "https://torgi.gov.by/",
+  "Origin":      "https://torgi.gov.by",
+};
+
+// ── Регионы ────────────────────────────────────────────────
 
 const REGION_ALIASES = {
-  "брестская": "Брестская",
-  "витебская": "Витебская",
-  "гомельская": "Гомельская",
-  "гродненская": "Гродненская",
-  "минская": "Минская",
-  "могилёвская": "Могилёвская",
-  "могилевская": "Могилёвская",
-  "г. минск": "Минск",
-  "г.минск": "Минск",
-  "минск": "Минск",
+  "брестская": "Брестская", "витебская": "Витебская",
+  "гомельская": "Гомельская", "гродненская": "Гродненская",
+  "минская": "Минская", "могилёвская": "Могилёвская",
+  "могилевская": "Могилёвская", "г. минск": "Минск",
+  "г.минск": "Минск", "минск": "Минск",
 };
 
 function normalizeRegion(raw) {
@@ -48,34 +55,63 @@ function normalizeRegion(raw) {
   return raw;
 }
 
-// ── Цена ──────────────────────────────────────────────────────
+// ── Цена ───────────────────────────────────────────────────
 
-function parsePriceByn(priceStr) {
-  if (!priceStr) return null;
-  const clean      = priceStr.replace(/BYN|Руб\.|руб\./gi, "").trim();
-  const normalized = clean.replace(/\s/g, "").replace(",", ".");
-  const val        = parseFloat(normalized);
-  return isNaN(val) ? null : val;
+function formatPrice(val) {
+  if (val == null || val === "") return "";
+  const num = parseFloat(String(val).replace(/\s/g, "").replace(",", "."));
+  if (isNaN(num)) return String(val);
+  return num.toLocaleString("ru-RU", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + " BYN";
 }
 
-// ── Матчинг ───────────────────────────────────────────────────
+// ── Lot URL ────────────────────────────────────────────────
+
+function makeLotUrl(lotId, auctionId, slug) {
+  const path = slug ? `/${slug}` : "";
+  return `${TORGI_SITE}/lot/${lotId}/${auctionId}${path}`;
+}
+
+// ── Нормализация лота из API JSON ──────────────────────────
+
+function normalizeLot(raw, categorySlug) {
+  // Типичные поля API (выясним точную структуру из первого реального ответа,
+  // здесь поддерживаем несколько вариантов именования полей)
+  const lotId     = raw.id       ?? raw.lotId    ?? raw.lot_id    ?? "";
+  const auctionId = raw.auctionId ?? raw.auction_id ?? raw.saleId ?? "";
+  const title     = raw.name     ?? raw.title    ?? raw.lotName   ?? "";
+  const category  = raw.categoryName ?? raw.category ?? raw.categoryTitle ?? "";
+  const region    = raw.regionName   ?? raw.region   ?? raw.regionTitle   ?? "";
+  const location  = raw.address      ?? raw.location ?? raw.lotAddress    ?? "";
+  const price     = raw.startPrice   ?? raw.price    ?? raw.startCost     ?? raw.initialPrice ?? "";
+  const urlSlug   = raw.urlName      ?? raw.slug     ?? raw.nameUrl       ?? "";
+
+  return {
+    lot_id:   String(lotId),
+    url:      makeLotUrl(lotId, auctionId, urlSlug),
+    slug:     categorySlug || "",
+    title:    String(title),
+    category: String(category),
+    region:   String(region),
+    location: String(location),
+    price:    formatPrice(price),
+  };
+}
+
+// ── Матчинг подписки ───────────────────────────────────────
 
 function matchLot(lot, sub) {
   if (!sub.source || sub.source !== "torgigov") return false;
 
-  // Фильтр по категории (slug верхнего уровня или slug подкатегории из поля category)
   if (sub.categories?.length > 0) {
-    const lotCat = (lot.category || "").toLowerCase();
     const lotSlug = lot.slug || "";
-    const match = sub.categories.some(slug =>
-      lotSlug === slug || lotCat.includes(slug.replace(/-/g, " "))
-    );
-    if (!match) return false;
+    const lotCat  = (lot.category || "").toLowerCase();
+    if (!sub.categories.some(s => lotSlug === s || lotCat.includes(s.replace(/-/g, " ")))) {
+      return false;
+    }
   }
 
-  // Фильтр по региону
   if (sub.region !== "all") {
-    const regions  = Array.isArray(sub.region) ? sub.region : [sub.region];
+    const regions   = Array.isArray(sub.region) ? sub.region : [sub.region];
     const lotRegion = normalizeRegion(lot.region || "").toLowerCase();
     const lotLoc    = (lot.location || "").toLowerCase();
     if (!regions.some(r => lotRegion.includes(r.toLowerCase()) || lotLoc.includes(r.toLowerCase()))) {
@@ -83,84 +119,129 @@ function matchLot(lot, sub) {
     }
   }
 
-  // Ключевые слова
   const text = [lot.title, lot.category, lot.location].join(" ").toLowerCase();
   if (!matchKeywords(text, sub.keywords)) return false;
 
-  // Максимальная цена
   if (sub.max_price > 0) {
-    const lotPrice = parsePriceByn(lot.price);
-    if (lotPrice !== null && lotPrice > sub.max_price) return false;
+    const raw = (lot.price || "").replace(/\s/g, "").replace(",", ".").replace("BYN","").trim();
+    const num = parseFloat(raw);
+    if (!isNaN(num) && num > sub.max_price) return false;
   }
 
   return true;
 }
 
-// ── Форматирование ────────────────────────────────────────────
-
 function formatLotMessage(lot) {
   let msg = `🏛 <a href="${lot.url}">${escapeHtml(lot.title)}</a>`;
-  if (lot.price)    msg += `\n💰 Цена: ${escapeHtml(lot.price)}`;
+  if (lot.price)    msg += `\n💰 ${escapeHtml(lot.price)}`;
   if (lot.region)   msg += `\n📍 ${escapeHtml(normalizeRegion(lot.region))}`;
   if (lot.location) msg += ` — ${escapeHtml(lot.location)}`;
   if (lot.category) msg += `\n🏷 ${escapeHtml(lot.category)}`;
   return msg;
 }
 
-// ── TOP_CATEGORIES — зеркало хардкода из torgigov_lib.py ─────
-// Сайт Angular SPA, категории недоступны через парсинг.
-// Обновлять синхронно с TOP_CATEGORIES в парсере.
+// ════════════════════════════════════════════════════════════
+// HANDLERS
+// ════════════════════════════════════════════════════════════
 
-const TOP_CATEGORIES = [
-  { slug: "nedvizhimost",          label: "Недвижимость",           category_id: 1   },
-  { slug: "transport-i-zapchasti", label: "Транспорт и запчасти",   category_id: 2   },
-  { slug: "oborudovanie",          label: "Оборудование",           category_id: 3   },
-  { slug: "komp-yutery",           label: "Компьютеры",             category_id: 4   },
-  { slug: "telefony-i-svyaz",      label: "Телефоны и связь",       category_id: 5   },
-  { slug: "mebel-i-inter-er",      label: "Мебель и интерьер",      category_id: 6   },
-  { slug: "produkty-pitaniya",     label: "Продукты питания",       category_id: 7   },
-  { slug: "tehnika-v-bytu",        label: "Техника в быту",         category_id: 8   },
-  { slug: "odezhda-obuv-i-dr",     label: "Одежда, обувь и др.",    category_id: 9   },
-  { slug: "stroitel-stvo",         label: "Строительство",          category_id: 10  },
-  { slug: "nematerial-nye",        label: "Нематериальные",         category_id: 11  },
-  { slug: "pravo-arendy-i-uslugi", label: "Право аренды и услуги",  category_id: 167 },
-  { slug: "zhivotnye-i-rasteniya", label: "Животные и растения",    category_id: 164 },
-];
+// GET /api-lots?category=1&page=0&pagesize=50&...
+// Проксирует запрос к api.torgi.gov.by/api/lots
+async function handleApiLots(request) {
+  const inUrl  = new URL(request.url);
+  const params = new URLSearchParams({
+    onlyNotActive: "false",
+    history:       "false",
+    sort1:         "approvetime",
+    summary:       "false",
+    onlyTitle:     "false",
+    queries:       "",
+    ask1:          "1",
+  });
 
-// ── Handlers ──────────────────────────────────────────────────
+  // Прокидываем параметры от парсера
+  for (const [k, v] of inUrl.searchParams) {
+    params.set(k, v);
+  }
 
+  const apiUrl = `${TORGI_API}/lots?${params.toString()}`;
+
+  try {
+    const resp = await fetch(apiUrl, { headers: API_HEADERS });
+    const body = await resp.text();
+    return new Response(body, {
+      status:  resp.status,
+      headers: { "Content-Type": "application/json; charset=utf-8" },
+    });
+  } catch (e) {
+    return jsonResponse({ ok: false, error: e.message }, 502);
+  }
+}
+
+// POST /fetch-page {url}
+// Проксирует fetch() к torgi.gov.by для SSR-страниц (главная, страница лота)
+const ALLOWED_HOSTS = ["torgi.gov.by", "api.torgi.gov.by"];
+
+async function handleFetchPage(body) {
+  const { url } = body || {};
+  if (!url) return new Response(JSON.stringify({ ok: false, error: "Missing url" }), { status: 400 });
+
+  let parsed;
+  try { parsed = new URL(url); } catch {
+    return new Response(JSON.stringify({ ok: false, error: "Invalid url" }), { status: 400 });
+  }
+  if (!ALLOWED_HOSTS.includes(parsed.hostname)) {
+    return new Response(JSON.stringify({ ok: false, error: `Only ${ALLOWED_HOSTS.join(", ")} allowed` }), { status: 403 });
+  }
+
+  try {
+    const resp = await fetch(url, {
+      headers: {
+        "User-Agent":               "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Accept":                   "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language":          "ru-RU,ru;q=0.9",
+        "Upgrade-Insecure-Requests": "1",
+      },
+      redirect: "follow",
+      cf: { cacheTtl: 0 },
+    });
+    const html = await resp.text();
+    return new Response(
+      JSON.stringify({ ok: true, status: resp.status, html }),
+      { headers: { "Content-Type": "application/json" } }
+    );
+  } catch (e) {
+    return new Response(JSON.stringify({ ok: false, error: e.message }), { status: 502 });
+  }
+}
+
+// GET /known-lots
 async function handleGetKnownLots(env) {
   const raw = await env.TORGIGOV_STORAGE.get("known_lots");
   return jsonResponse(raw ? JSON.parse(raw) : {});
 }
 
+// GET /categories
 async function handleGetCategories(env) {
   const raw = await env.TORGIGOV_STORAGE.get("categories");
-  // Если KV пуст (до первого snapshot) — отдаём встроенный список
-  return jsonResponse(raw ? JSON.parse(raw) : TOP_CATEGORIES);
+  return jsonResponse(raw ? JSON.parse(raw) : []);
 }
 
+// GET /status
 async function handleGetStatus(env) {
   const [last_full_reset, snapshot_ts] = await Promise.all([
     env.TORGIGOV_STORAGE.get("last_full_reset"),
     env.TORGIGOV_STORAGE.get("snapshot_timestamp"),
   ]);
-  return jsonResponse({
-    last_full_reset,
-    snapshot_ts,
-    current_time: new Date().toLocaleString("ru-RU", { timeZone: "Europe/Moscow" }),
-  });
+  return jsonResponse({ last_full_reset, snapshot_ts, current_time: new Date().toISOString() });
 }
 
+// POST /snapshot  {snapshot: {slug: [lotId, ...]}}
 async function handleSnapshot(body, env) {
-  // body.snapshot = {slug: [path, ...]}
   const existing = await env.TORGIGOV_STORAGE.get("known_lots");
   const current  = existing ? JSON.parse(existing) : {};
-
-  for (const [slug, paths] of Object.entries(body.snapshot || {})) {
-    current[slug] = paths;
+  for (const [slug, ids] of Object.entries(body.snapshot || {})) {
+    current[slug] = ids;
   }
-
   await env.TORGIGOV_STORAGE.put("known_lots", JSON.stringify(current));
   const ts = new Date().toISOString();
   await env.TORGIGOV_STORAGE.put("snapshot_timestamp", ts);
@@ -168,6 +249,7 @@ async function handleSnapshot(body, env) {
   return jsonResponse({ ok: true, ts });
 }
 
+// POST /save-categories  {categories: [...]}
 async function handleSaveCategories(body, env) {
   const { categories } = body;
   if (!Array.isArray(categories)) return new Response("Bad categories", { status: 400 });
@@ -175,26 +257,25 @@ async function handleSaveCategories(body, env) {
   return jsonResponse({ ok: true, count: categories.length });
 }
 
+// POST /add-lots  {slug, lot_ids: [...]}
 async function handleAddLots(body, env) {
-  const { slug, paths } = body;
-  if (!slug || !Array.isArray(paths)) return new Response("Bad request", { status: 400 });
+  const { slug, lot_ids } = body;
+  if (!slug || !Array.isArray(lot_ids)) return new Response("Bad request", { status: 400 });
 
-  const raw     = await env.TORGIGOV_STORAGE.get("known_lots");
-  const current = raw ? JSON.parse(raw) : {};
-  const existing = current[slug] || [];
-  const existingSet = new Set(existing);
-  const newPaths = paths.filter(p => !existingSet.has(p));
+  const raw      = await env.TORGIGOV_STORAGE.get("known_lots");
+  const current  = raw ? JSON.parse(raw) : {};
+  const existing = new Set(current[slug] || []);
+  const newIds   = lot_ids.filter(id => !existing.has(String(id)));
 
-  // Новые вставляем в начало (rank 0 = самый новый)
-  current[slug] = [...newPaths, ...existing];
+  current[slug] = [...newIds.map(String), ...(current[slug] || [])];
   await env.TORGIGOV_STORAGE.put("known_lots", JSON.stringify(current));
-  return jsonResponse({ ok: true, added: newPaths.length });
+  return jsonResponse({ ok: true, added: newIds.length });
 }
 
+// POST /save-daily-lots  {date, slug, lots: [...], ttl}
 async function handleSaveDailyLots(body, env) {
   const { date, slug, lots, ttl } = body;
   if (!date || !slug || !Array.isArray(lots)) return new Response("Bad request", { status: 400 });
-
   await env.TORGIGOV_STORAGE.put(
     `daily_lots:${date}:${slug}`,
     JSON.stringify(lots),
@@ -203,6 +284,7 @@ async function handleSaveDailyLots(body, env) {
   return jsonResponse({ ok: true, count: lots.length });
 }
 
+// POST /send-notifications  {date, slug}
 async function handleSendNotifications(body, env) {
   const { date, slug } = body;
   if (!date || !slug) return new Response("Missing date or slug", { status: 400 });
@@ -220,60 +302,7 @@ async function handleSendNotifications(body, env) {
   return jsonResponse({ ok: true, sent });
 }
 
-// ── /fetch-page — ретранслятор запросов к torgi.gov.by ───────
-// GitHub Actions IP заблокированы на torgi.gov.by на сетевом уровне.
-// Cloudflare Worker fetch() идёт через edge-серверы Cloudflare (в т.ч. RU),
-// которые имеют доступ к сайту.
-
-const ALLOWED_HOST = "torgi.gov.by";
-
-async function handleFetchPage(body) {
-  const { url } = body || {};
-
-  if (!url || typeof url !== "string") {
-    return new Response(JSON.stringify({ ok: false, error: "Missing url" }),
-      { status: 400, headers: { "Content-Type": "application/json" } });
-  }
-
-  // Разрешаем только torgi.gov.by во избежание использования как open proxy
-  let parsed;
-  try { parsed = new URL(url); } catch {
-    return new Response(JSON.stringify({ ok: false, error: "Invalid url" }),
-      { status: 400, headers: { "Content-Type": "application/json" } });
-  }
-  if (parsed.hostname !== ALLOWED_HOST) {
-    return new Response(JSON.stringify({ ok: false, error: `Only ${ALLOWED_HOST} allowed` }),
-      { status: 403, headers: { "Content-Type": "application/json" } });
-  }
-
-  try {
-    const resp = await fetch(url, {
-      headers: {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "ru-RU,ru;q=0.9,en;q=0.5",
-        "Accept-Encoding": "gzip, deflate, br",
-        "Connection": "keep-alive",
-        "Upgrade-Insecure-Requests": "1",
-      },
-      redirect: "follow",
-      cf: { cacheTtl: 0 },   // не кешировать в CF — нам нужны свежие данные
-    });
-
-    const html = await resp.text();
-    return new Response(
-      JSON.stringify({ ok: true, status: resp.status, html }),
-      { headers: { "Content-Type": "application/json" } }
-    );
-  } catch (e) {
-    return new Response(
-      JSON.stringify({ ok: false, error: e.message }),
-      { status: 502, headers: { "Content-Type": "application/json" } }
-    );
-  }
-}
-
-// ── Fetch handler ─────────────────────────────────────────────
+// ── Fetch handler ──────────────────────────────────────────
 
 export default {
   async fetch(request, env) {
@@ -284,10 +313,13 @@ export default {
       const path   = url.pathname;
       const method = request.method;
 
+      // GET endpoints
       if (method === "GET" && path === "/known-lots")  return handleGetKnownLots(env);
       if (method === "GET" && path === "/categories")  return handleGetCategories(env);
       if (method === "GET" && path === "/status")      return handleGetStatus(env);
+      if (method === "GET" && path === "/api-lots")    return handleApiLots(request);
 
+      // POST endpoints
       const body = await request.json().catch(() => null);
       if (!body) return new Response("Bad JSON", { status: 400 });
 
