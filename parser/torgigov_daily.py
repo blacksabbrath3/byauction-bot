@@ -2,14 +2,13 @@
 torgigov_daily.py — ежедневный парсер новых лотов torgi.gov.by
 
 Алгоритм:
-  1. GET /torgigov/known-lots  → {slug: [path, ...]}
-  2. GET /torgigov/categories  → список из KV (snapshot кладёт туда раз в месяц)
-     Если KV пуст — парсим категории напрямую с сайта через прокси
-  3. По каждой категории парсим страницы каталога, ищем новые лоты
-  4. POST /torgigov/add-lots   → добавляем новые пути в known_lots
-  5. Парсим детали новых лотов → POST /torgigov/save-daily-lots
-  6. Если прошло ≥ FULL_RESET_EVERY_DAYS → запускаем snapshot
-  7. Ждём NOTIFY_TIME_UTC → POST /torgigov/send-notifications
+  1. GET /known-lots  → {slug: [lot_id, ...]}
+  2. GET /categories  → список из KV
+  3. По каждой категории: GET /api-lots?page=0&pagesize=50&sort=approvetime
+     Сравниваем ID с known_lots — находим новые (остановка при первом известном)
+  4. POST /add-lots   → добавляем новые ID
+  5. POST /save-daily-lots → сохраняем детали новых лотов
+  6. Ждём NOTIFY_TIME_UTC → POST /send-notifications
 """
 
 import os
@@ -33,8 +32,8 @@ PARSER_SECRET = cfg.PARSER_SECRET
 # ════════════════════════════════════════════════════════════
 
 def _get(path: str) -> dict:
-    r = lib.SESSION.get(
-        f"{WORKER_URL}{path}",
+    r = lib._SESSION.get(
+        f"{WORKER_URL}/{path}",
         headers={"X-API-Key": PARSER_SECRET},
         timeout=30,
     )
@@ -44,140 +43,184 @@ def _get(path: str) -> dict:
 
 def _post(path: str, body: dict) -> dict:
     r = requests.post(
-        f"{WORKER_URL}{path}",
+        f"{WORKER_URL}/{path}",
         json=body,
-        headers={"X-API-Key": PARSER_SECRET},
+        headers={"X-API-Key": PARSER_SECRET, "Content-Type": "application/json"},
         timeout=60,
     )
     r.raise_for_status()
     return r.json()
 
 
-def fetch_known_lots() -> dict[str, dict[str, int]]:
-    """
-    GET /torgigov/known-lots → {slug: [path, ...]}
-    Конвертируем в {slug: {path: rank}} для алгоритма find_new_lots.
-    """
+def fetch_known_lots() -> dict[str, set[str]]:
+    """GET /known-lots → {slug: set(lot_id)}"""
     try:
-        data = _get("/known-lots")
-        result = {}
-        for slug, value in data.items():
-            if isinstance(value, list):
-                result[slug] = {path: rank for rank, path in enumerate(value)}
-            elif isinstance(value, dict):
-                result[slug] = {k: int(v) for k, v in value.items()}
-            else:
-                result[slug] = {}
-        return result
+        data = _get("known-lots")
+        return {slug: set(str(i) for i in ids) for slug, ids in data.items()}
     except Exception as e:
-        print(f"[!] Не удалось получить known_lots: {e} — пустая база")
+        print(f"[!] known-lots: {e} — пустая база")
         return {}
+
+
+def fetch_categories() -> list[dict]:
+    try:
+        return _get("categories")
+    except Exception as e:
+        print(f"[!] categories: {e}")
+        return []
 
 
 def should_do_full_reset() -> bool:
     try:
-        data = _get("/status")
-        last_reset = data.get("last_full_reset")
-        if not last_reset:
+        data  = _get("status")
+        last  = data.get("last_full_reset")
+        if not last:
             return False
-        last_dt = datetime.fromisoformat(last_reset.replace("Z", "+00:00"))
-        days = (datetime.now(timezone.utc) - last_dt).days
-        print(f"[i] Последний сброс: {last_reset} ({days} дн. назад)")
+        last_dt = datetime.fromisoformat(last.replace("Z", "+00:00"))
+        days    = (datetime.now(timezone.utc) - last_dt).days
+        print(f"[i] Последний сброс: {last} ({days} дн. назад)")
         return days >= cfg.FULL_RESET_EVERY_DAYS
     except Exception as e:
-        print(f"[!] Не удалось проверить /status: {e}")
+        print(f"[!] status: {e}")
         return False
 
 
 # ════════════════════════════════════════════════════════════
-# ПАРСИНГ КАТЕГОРИИ
+# ОПОВЕЩЕНИЯ ОБ ОШИБКЕ
 # ════════════════════════════════════════════════════════════
 
-def parse_category_daily(cat: dict, snapshot: dict[str, int]) -> list[str]:
+_ALERT_SUBJECT = "⚠️ torgigov: парсер завершился с ошибкой"
+
+
+def _alert_message(error: str) -> str:
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    return (
+        f"Парсер torgi.gov.by завершился с ошибкой:\n\n"
+        f"{error}\n\n"
+        f"Время: {ts}\n\n"
+        f"Что делать:\n"
+        f"  1. Проверить деплой Cloudflare Worker\n"
+        f"  2. Проверить доступность: GET {WORKER_URL}/status\n"
+        f"  3. Перезапустить: Actions → torgigov_daily → Run workflow"
+    )
+
+
+def send_alert_email(error: str) -> None:
+    to_addr   = getattr(cfg, "ALERT_EMAIL", "blacksabbrath@gmail.com")
+    smtp_host = os.environ.get("ALERT_SMTP_HOST", "smtp.gmail.com")
+    smtp_port = int(os.environ.get("ALERT_SMTP_PORT", "587"))
+    smtp_user = os.environ.get("ALERT_SMTP_USER", "")
+    smtp_pass = os.environ.get("ALERT_SMTP_PASS", "")
+    if not smtp_user or not smtp_pass:
+        print("  [!] Email: ALERT_SMTP_USER / ALERT_SMTP_PASS не заданы")
+        return
+    msg           = MIMEText(_alert_message(error), "plain", "utf-8")
+    msg["Subject"] = _ALERT_SUBJECT
+    msg["From"]    = smtp_user
+    msg["To"]      = to_addr
+    try:
+        with smtplib.SMTP(smtp_host, smtp_port, timeout=20) as s:
+            s.ehlo(); s.starttls(); s.login(smtp_user, smtp_pass)
+            s.sendmail(smtp_user, [to_addr], msg.as_string())
+        print(f"  [✓] Email → {to_addr}")
+    except Exception as e:
+        print(f"  [✗] Email: {e}")
+
+
+def send_alert_telegram(error: str) -> None:
+    bot_token = os.environ.get("BOT_TOKEN", "")
+    chat_id   = os.environ.get("ALERT_TELEGRAM_CHAT_ID", getattr(cfg, "ALERT_TELEGRAM_CHAT_ID", ""))
+    if not bot_token or not chat_id:
+        print("  [!] Telegram: BOT_TOKEN / ALERT_TELEGRAM_CHAT_ID не заданы")
+        return
+    text = f"<b>{_ALERT_SUBJECT}</b>\n\n" + _alert_message(error).replace("&","&amp;").replace("<","&lt;")
+    try:
+        r = requests.post(
+            f"https://api.telegram.org/bot{bot_token}/sendMessage",
+            json={"chat_id": chat_id, "text": text, "parse_mode": "HTML"},
+            timeout=20,
+        )
+        if r.ok:
+            print(f"  [✓] Telegram → chat_id={chat_id}")
+        else:
+            print(f"  [✗] Telegram: {r.status_code} {r.text[:100]}")
+    except Exception as e:
+        print(f"  [✗] Telegram: {e}")
+
+
+def send_alert(error: str) -> None:
+    print("\n[⚠] Отправляю оповещение об ошибке…")
+    send_alert_email(error)
+    send_alert_telegram(error)
+
+
+# ════════════════════════════════════════════════════════════
+# ПАРСИНГ ОДНОЙ КАТЕГОРИИ
+# ════════════════════════════════════════════════════════════
+
+def parse_category_daily(cat: dict, known_ids: set[str]) -> list[dict]:
     """
-    Парсит категорию постранично, останавливается при обнаружении
-    известных лотов (алгоритм find_new_lots).
+    Запрашивает первую страницу API, находит новые лоты.
+    Если все лоты на странице новые — запрашивает следующую.
+    Останавливается при первом известном lot_id.
     """
     slug   = cat["slug"]
     cat_id = cat["category_id"]
     label  = cat["label"]
     print(f"\n[+] Категория: {label}")
 
-    all_daily: list[str] = []
-    page = 1
-    stopped = False
+    all_new: list[dict] = []
+    pagesize = cfg.DAILY_PAGE_SIZE
+    page     = 0
 
-    while not stopped:
-        url = lib.build_catalog_url(slug, cat_id, page)
-        print(f"  → стр. {page}: {url}")
+    while True:
+        print(f"  → стр. {page}: category={cat_id}")
+        lots, total_pages = lib.fetch_lots_page(cat_id, slug, page=page, pagesize=pagesize)
 
-        soup = lib.get_soup(url)
-        if soup is None:
-            print("  [!] Пропуск страницы")
+        if not lots:
+            print(f"  [i] Пустая страница — останавливаю")
             break
 
-        found = lib.extract_lot_urls(soup)
-        print(f"     лотов на странице: {len(found)}")
-        if not found:
+        new_on_page = lib.find_new_lots_by_id(lots, known_ids)
+        all_new.extend(new_on_page)
+
+        print(f"     лотов: {len(lots)}, новых: {len(new_on_page)}")
+
+        # Если на странице есть известные — все остальные тоже известны
+        if len(new_on_page) < len(lots):
             break
-
-        prev_len = len(all_daily)
-        for p in found:
-            if p not in all_daily:
-                all_daily.append(p)
-
-        new_paths = lib.find_new_lots(all_daily, snapshot)
-
-        added_this_page = len(all_daily) - prev_len
-        if added_this_page > 0 and len(new_paths) < len(all_daily):
-            stopped = True
-        elif lib.get_next_page_url(soup, url) is None:
-            break
-        else:
+        # Все на странице новые и есть следующая — идём дальше
+        if page + 1 < total_pages:
             page += 1
             lib.pause(cfg.DELAY_BETWEEN_LIST_PAGES)
+        else:
+            break
 
-    new_paths = lib.find_new_lots(all_daily, snapshot)
-    print(f"  Новых: {len(new_paths)} из {len(all_daily)} проверенных")
-    lib.pause(cfg.DELAY_BETWEEN_SECTIONS)
-    return new_paths
+    print(f"  Новых лотов: {len(all_new)}")
+    return all_new
 
 
 # ════════════════════════════════════════════════════════════
-# СОХРАНЕНИЕ В KV
+# СОХРАНЕНИЕ
 # ════════════════════════════════════════════════════════════
 
-def add_to_known_lots(slug: str, new_paths: list[str]) -> None:
-    if not new_paths:
+def save_new_lots(slug: str, new_lots: list[dict]) -> None:
+    if not new_lots:
         return
+    ids = [l["lot_id"] for l in new_lots if l["lot_id"]]
     try:
-        r = _post("/add-lots", {"slug": slug, "paths": new_paths})
-        print(f"  [✓] /add-lots: {str(r)[:120]}")
+        r = _post("add-lots", {"slug": slug, "lot_ids": ids})
+        print(f"  [✓] /add-lots: {r}")
     except Exception as e:
         print(f"  [✗] /add-lots: {e}")
 
-
-def fetch_details_and_save(slug: str, label: str, new_paths: list[str]) -> None:
-    if not new_paths:
-        return
-    print(f"\n  Парсю детали {len(new_paths)} лотов «{label}»…")
-    lots = []
-    for i, path in enumerate(new_paths, 1):
-        print(f"    [{i}/{len(new_paths)}] {path}")
-        lot = lib.parse_lot_details(path)
-        lot["slug"] = slug
-        lots.append(lot)
-        lib.pause(cfg.DELAY_BETWEEN_LOT_PAGES)
-
     today = date.today().isoformat()
     try:
-        r = _post("/save-daily-lots", {
-            "date": today,
-            "slug": slug,
-            "lots": lots,
-            "ttl":  cfg.DAILY_LOTS_TTL_SECONDS,
+        r = _post("save-daily-lots", {
+            "date": today, "slug": slug,
+            "lots": new_lots, "ttl": cfg.DAILY_LOTS_TTL_SECONDS,
         })
-        print(f"  [✓] /save-daily-lots: {str(r)[:120]}")
+        print(f"  [✓] /save-daily-lots: {r}")
     except Exception as e:
         print(f"  [✗] /save-daily-lots: {e}")
 
@@ -190,113 +233,31 @@ def wait_until_notify_time() -> None:
     hour, minute = map(int, cfg.NOTIFY_TIME_UTC.split(":"))
     now    = datetime.now(timezone.utc)
     target = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
-    wait_sec = (target - now).total_seconds()
-    if wait_sec > 0:
-        print(f"\n[→] Жду до {cfg.NOTIFY_TIME_UTC} UTC ({int(wait_sec // 60)} мин)…")
-        time.sleep(wait_sec)
-    else:
-        print(f"\n[→] Время рассылки {cfg.NOTIFY_TIME_UTC} UTC наступило, рассылаю сразу.")
+    wait   = (target - now).total_seconds()
+    if wait > 0:
+        print(f"\n[→] Жду до {cfg.NOTIFY_TIME_UTC} UTC ({int(wait // 60)} мин)…")
+        time.sleep(wait)
 
 
 def send_notifications(slugs: list[str]) -> None:
     today = date.today().isoformat()
     for slug in slugs:
-        print(f"  [→] /send-notifications: {slug} за {today}")
+        print(f"  [→] /send-notifications: {slug}")
         try:
-            r = _post("/send-notifications", {"date": today, "slug": slug})
-            print(f"  [✓] {str(r)[:120]}")
+            r = _post("send-notifications", {"date": today, "slug": slug})
+            print(f"  [✓] {r}")
         except Exception as e:
-            print(f"  [✗] /send-notifications [{slug}]: {e}")
+            print(f"  [✗] {e}")
 
 
 # ════════════════════════════════════════════════════════════
-# ОПОВЕЩЕНИЯ ОБ ОШИБКЕ ПРОКСИ
-# ════════════════════════════════════════════════════════════
-
-_ALERT_SUBJECT = "⚠️ torgigov: парсер завершился с ошибкой"
-
-def _alert_message(error: str) -> str:
-    ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-    return (
-        f"Парсер torgi.gov.by завершился с ошибкой:\n\n"
-        f"{error}\n\n"
-        f"Время: {ts}\n\n"
-        f"Что делать:\n"
-        f"  1. Проверить доступность torgi.gov.by через Cloudflare Worker:\n"
-        f"     POST {cfg.TORGIGOV_WORKER_URL}/fetch-page {{\"url\": \"https://torgi.gov.by/\"}}\n"
-        f"  2. Проверить деплой воркера (Actions → deploy)\n"
-        f"  3. Перезапустить workflow вручную: Actions → torgigov_daily → Run workflow"
-    )
-
-
-def send_alert_email(error: str) -> None:
-    """Отправляет письмо через SMTP. Настройки берутся из env/config."""
-    to_addr  = getattr(cfg, "ALERT_EMAIL", "blacksabbrath@gmail.com")
-    smtp_host = os.environ.get("ALERT_SMTP_HOST", "smtp.gmail.com")
-    smtp_port = int(os.environ.get("ALERT_SMTP_PORT", "587"))
-    smtp_user = os.environ.get("ALERT_SMTP_USER", "")
-    smtp_pass = os.environ.get("ALERT_SMTP_PASS", "")
-
-    if not smtp_user or not smtp_pass:
-        print(f"  [!] Email: ALERT_SMTP_USER / ALERT_SMTP_PASS не заданы — письмо не отправлено")
-        return
-
-    msg = MIMEText(_alert_message(error), "plain", "utf-8")
-    msg["Subject"] = _ALERT_SUBJECT
-    msg["From"]    = smtp_user
-    msg["To"]      = to_addr
-
-    try:
-        with smtplib.SMTP(smtp_host, smtp_port, timeout=20) as s:
-            s.ehlo()
-            s.starttls()
-            s.login(smtp_user, smtp_pass)
-            s.sendmail(smtp_user, [to_addr], msg.as_string())
-        print(f"  [✓] Email отправлен → {to_addr}")
-    except Exception as e:
-        print(f"  [✗] Email не отправлен: {e}")
-
-
-def send_alert_telegram(error: str) -> None:
-    """Отправляет сообщение в Telegram через Bot API."""
-    bot_token = os.environ.get("BOT_TOKEN", getattr(cfg, "BOT_TOKEN", ""))
-    chat_id   = os.environ.get("ALERT_TELEGRAM_CHAT_ID",
-                               getattr(cfg, "ALERT_TELEGRAM_CHAT_ID", ""))
-
-    if not bot_token or not chat_id:
-        print(f"  [!] Telegram: BOT_TOKEN / ALERT_TELEGRAM_CHAT_ID не заданы")
-        return
-
-    text = f"<b>{_ALERT_SUBJECT}</b>\n\n" + _alert_message(error).replace("&", "&amp;").replace("<", "&lt;")
-    try:
-        r = requests.post(
-            f"https://api.telegram.org/bot{bot_token}/sendMessage",
-            json={"chat_id": chat_id, "text": text, "parse_mode": "HTML"},
-            timeout=20,
-        )
-        if r.ok:
-            print(f"  [✓] Telegram уведомление отправлено → chat_id={chat_id}")
-        else:
-            print(f"  [✗] Telegram API: {r.status_code} {r.text[:200]}")
-    except Exception as e:
-        print(f"  [✗] Telegram не отправлен: {e}")
-
-
-def send_proxy_alert(error: str) -> None:
-    """Отправляет уведомление всеми доступными каналами."""
-    print("\n[⚠] Отправляю оповещение об исчерпании прокси…")
-    send_alert_email(error)
-    send_alert_telegram(error)
-
-
-# ════════════════════════════════════════════════════════════
-# ТОЧКА ВХОДА
+# MAIN
 # ════════════════════════════════════════════════════════════
 
 def random_delay() -> None:
     import random
     if os.environ.get("SKIP_RANDOM_DELAY", "").lower() == "true":
-        print("[i] Рандомная задержка пропущена (ручной запуск).")
+        print("[i] Рандомная задержка пропущена.")
         return
     delay = random.randint(0, cfg.RANDOM_DELAY_MAX_SECONDS)
     print(f"[i] Рандомная задержка: {delay} сек ({delay // 60} мин)")
@@ -310,69 +271,52 @@ def main() -> None:
 
     random_delay()
 
-    # Проверяем что прокси-сессия инициализировалась
-    from proxy_pool import get_proxy_session
-    ps = get_proxy_session()
-    if ps._pool:
-        print(f"[i] Рабочих прокси: {len(ps._pool)}")
-    else:
-        print("[!] Рабочих прокси нет. Для доступа к torgi.gov.by нужен")
-        print("    self-hosted GitHub Actions runner на VPS в России или Беларуси.")
-        print("    Подробнее: https://docs.github.com/en/actions/hosting-your-own-runners")
-
-    # 1. Загружаем known_lots
     print("\n[1] Загружаю known_lots…")
     known_all = fetch_known_lots()
-    for slug, v in known_all.items():
-        print(f"    {slug:40s}: {len(v)} известных")
+    for slug, ids in known_all.items():
+        print(f"    {slug:45s}: {len(ids)} известных")
 
-    # 2. Загружаем категории из KV (туда snapshot кладёт актуальный список)
     print("\n[2] Загружаю категории…")
     categories = fetch_categories()
     if not categories:
-        print("    [!] KV пуст, парсю категории напрямую…")
+        print("[!] Категории не получены — парсю напрямую…")
         categories = lib.parse_top_categories()
     if not categories:
-        print("[!] Категории не получены — прерываю")
-        sys.exit(1)
+        raise RuntimeError("Не удалось получить список категорий")
     print(f"    Категорий: {len(categories)}")
 
-    total_new = 0
-    slugs_with_new: list[str] = []
+    total_new      = 0
+    slugs_with_new = []
 
-    # 3-5. По каждой категории
     for cat in categories:
-        slug = cat["slug"]
-        snap = known_all.get(slug, {})
+        slug     = cat["slug"]
+        known    = known_all.get(slug, set())
+        new_lots = parse_category_daily(cat, known)
 
-        new_paths = parse_category_daily(cat, snap)
-        if not new_paths:
-            print(f"  Новых лотов нет.")
+        if not new_lots:
             continue
 
-        total_new += len(new_paths)
+        total_new += len(new_lots)
         slugs_with_new.append(slug)
-        add_to_known_lots(slug, new_paths)
-        fetch_details_and_save(slug, cat["label"], new_paths)
+        save_new_lots(slug, new_lots)
+        lib.pause(cfg.DELAY_BETWEEN_SECTIONS)
 
     print(f"\n{'─' * 60}")
     print(f"  Итого новых лотов: {total_new}")
 
-    # 6. Полный сброс если нужен
-    print("\n[6] Проверяю необходимость полного сброса…")
+    print("\n[3] Проверяю необходимость полного сброса…")
     if should_do_full_reset():
         print("[→] Запускаю полный слепок…")
         snapshot_module.main()
     else:
         print("[i] Полный сброс не нужен.")
 
-    # 7. Уведомления
     if slugs_with_new:
         wait_until_notify_time()
-        print("\n[7] Отправляю уведомления…")
+        print("\n[4] Отправляю уведомления…")
         send_notifications(slugs_with_new)
     else:
-        print("\n[7] Новых лотов нет — уведомления не отправляются.")
+        print("\n[4] Новых лотов нет — уведомления не отправляются.")
 
     print(f"\n{'=' * 60}")
     print("  Готово.")
@@ -385,5 +329,5 @@ if __name__ == "__main__":
     except Exception as e:
         msg = str(e)
         print(f"\n[✗] КРИТИЧЕСКАЯ ОШИБКА: {msg}")
-        send_proxy_alert(msg)
+        send_alert(msg)
         sys.exit(1)
