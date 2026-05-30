@@ -1,22 +1,18 @@
 """
-torgigov_lib.py — общие функции парсера torgi.gov.by
+torgigov_lib.py — функции парсера torgi.gov.by
 
-Доступ к сайту:
-  torgi.gov.by блокирует GitHub Actions IP на сетевом уровне (403 без CF-Ray).
-  Все HTTP-запросы идут через эндпоинт /fetch-page Cloudflare Worker'а,
-  который делает fetch() от имени Cloudflare edge (включая RU-точки присутствия).
+Доступ к данным:
+  api.torgi.gov.by/api заблокирован с GitHub Actions IP.
+  Все API-запросы проксируются через Cloudflare Worker:
 
-  get_soup(url) → POST {TORGIGOV_WORKER_URL}/fetch-page {url: "..."}
-               → Worker возвращает {ok, status, html}
-               → BeautifulSoup(html)
+    GET  {WORKER}/api-lots?category=1&page=0&pagesize=50
+         → Worker вызывает api.torgi.gov.by/api/lots → возвращает JSON
+    POST {WORKER}/fetch-page {url: "https://torgi.gov.by/lot/..."}
+         → Worker делает fetch() → возвращает {ok, status, html}
 
-Структура сайта:
-  Каталог:   https://torgi.gov.by/catalog/{slug}/{page}/?category={id}
-  Лот:       https://torgi.gov.by/lot/{lot_id}/{auction_id}/
-
-Таблицы на странице лота:
-  .detail_lot_part1   — Наименование, Категория, Регион, Местонахождение
-  .detail_lot_part2   — Начальная цена единицы
+Список лотов: JSON API (не HTML-парсинг)
+Данные лота:  JSON API (поля name, regionName, address, startPrice, ...)
+Категории:    из меню главной страницы (SSR) + hardcoded fallback
 """
 
 import re
@@ -24,81 +20,78 @@ import time
 import random
 import requests
 from bs4 import BeautifulSoup
-from urllib.parse import urljoin, unquote
+from urllib.parse import unquote
 
 import config as cfg
 
-BASE_URL = "https://torgi.gov.by"
-
-# URL лота: /lot/{lot_id}/{auction_id}/ или /lot/{lot_id}/{auction_id}/{slug}/
-_LOT_URL_RE = re.compile(r"^/lot/(\d+)/(\d+)(?:/[^/?#]*)?/?$")
-
-# Сессия для запросов к Worker'у (не к torgi.gov.by напрямую)
-_SESSION = requests.Session()
+BASE_URL    = "https://torgi.gov.by"
+_SESSION    = requests.Session()
 _SESSION.headers.update({"Content-Type": "application/json"})
 
+# Шаблон URL лота: /lot/{lotId}/{auctionId}/
+_LOT_URL_RE = re.compile(r"/lot/(\d+)/(\d+)/")
+
 
 # ════════════════════════════════════════════════════════════
-# HTTP — все запросы к torgi.gov.by идут через Worker /fetch-page
+# HTTP К WORKER
 # ════════════════════════════════════════════════════════════
 
-class WorkerFetchError(Exception):
-    """Worker недоступен или вернул ошибку при попытке достучаться до torgi.gov.by."""
-
-
-def get_soup(url: str) -> BeautifulSoup | None:
-    """
-    Получает HTML страницы через Cloudflare Worker /fetch-page.
-    При сетевых ошибках повторяет REQUEST_RETRIES раз.
-    Возвращает BeautifulSoup или None при ошибке.
-    """
-    worker_url = f"{cfg.TORGIGOV_WORKER_URL}/fetch-page"
-
+def _worker_get(path: str, params: dict = None) -> dict | list | None:
+    """GET {WORKER_URL}/{path}?params — возвращает parsed JSON или None."""
+    url = f"{cfg.TORGIGOV_WORKER_URL}/{path.lstrip('/')}"
     for attempt in range(1, cfg.REQUEST_RETRIES + 1):
         try:
-            r = _SESSION.post(
-                worker_url,
-                json={"url": url},
+            r = _SESSION.get(
+                url, params=params,
                 headers={"X-API-Key": cfg.PARSER_SECRET},
                 timeout=cfg.REQUEST_TIMEOUT,
             )
             r.raise_for_status()
-            data = r.json()
-
-            if not data.get("ok"):
-                err = data.get("error", "unknown")
-                print(f"  [!] Worker /fetch-page error: {err} (url={url})")
-                # Worker вернул ответ, но сам получил ошибку от torgi.gov.by
-                if attempt < cfg.REQUEST_RETRIES:
-                    time.sleep(cfg.RETRY_BASE_DELAY * attempt)
-                    continue
-                return None
-
-            status = data.get("status", 0)
-            if status == 403:
-                print(f"  [!] torgi.gov.by вернул 403 даже через Worker — сайт недоступен")
-                return None
-            if status >= 500:
-                print(f"  [!] torgi.gov.by вернул {status}, попытка {attempt}/{cfg.REQUEST_RETRIES}")
-                if attempt < cfg.REQUEST_RETRIES:
-                    time.sleep(cfg.RETRY_BASE_DELAY * attempt)
-                    continue
-                return None
-
-            return BeautifulSoup(data["html"], "html.parser")
-
+            return r.json()
         except requests.RequestException as e:
-            print(f"  [!] Ошибка связи с Worker ({attempt}/{cfg.REQUEST_RETRIES}): {e}")
+            print(f"  [!] Worker GET {path} ({attempt}/{cfg.REQUEST_RETRIES}): {e}")
             if attempt < cfg.REQUEST_RETRIES:
                 time.sleep(cfg.RETRY_BASE_DELAY * attempt)
-
     return None
+
+
+def _worker_post(path: str, body: dict) -> dict | None:
+    """POST {WORKER_URL}/{path} body — возвращает parsed JSON или None."""
+    url = f"{cfg.TORGIGOV_WORKER_URL}/{path.lstrip('/')}"
+    for attempt in range(1, cfg.REQUEST_RETRIES + 1):
+        try:
+            r = _SESSION.post(
+                url, json=body,
+                headers={"X-API-Key": cfg.PARSER_SECRET},
+                timeout=cfg.REQUEST_TIMEOUT,
+            )
+            r.raise_for_status()
+            return r.json()
+        except requests.RequestException as e:
+            print(f"  [!] Worker POST {path} ({attempt}/{cfg.REQUEST_RETRIES}): {e}")
+            if attempt < cfg.REQUEST_RETRIES:
+                time.sleep(cfg.RETRY_BASE_DELAY * attempt)
+    return None
+
+
+def get_soup(url: str) -> BeautifulSoup | None:
+    """Получает HTML через Worker /fetch-page (для SSR-страниц)."""
+    data = _worker_post("fetch-page", {"url": url})
+    if not data:
+        return None
+    if not data.get("ok"):
+        print(f"  [!] fetch-page error: {data.get('error')} (url={url})")
+        return None
+    status = data.get("status", 0)
+    if status >= 400:
+        print(f"  [!] fetch-page status={status} (url={url})")
+        return None
+    return BeautifulSoup(data["html"], "html.parser")
 
 
 def pause(base: float) -> None:
     jitter = random.uniform(-cfg.DELAY_JITTER, cfg.DELAY_JITTER)
-    actual = max(base + jitter, cfg.DELAY_MINIMUM)
-    time.sleep(actual)
+    time.sleep(max(base + jitter, cfg.DELAY_MINIMUM))
 
 
 def _clean(text: str) -> str:
@@ -106,35 +99,35 @@ def _clean(text: str) -> str:
 
 
 # ════════════════════════════════════════════════════════════
-# ПАРСИНГ КАТЕГОРИЙ
+# КАТЕГОРИИ
 # ════════════════════════════════════════════════════════════
 
 _FALLBACK_CATEGORIES = [
-    {"slug": "nedvizhimost",          "label": "Недвижимость",           "category_id": 1},
-    {"slug": "transport-i-zapchasti", "label": "Транспорт и запчасти",   "category_id": 2},
-    {"slug": "oborudovanie",          "label": "Оборудование",           "category_id": 3},
-    {"slug": "komp-yutery",           "label": "Компьютеры",             "category_id": 4},
-    {"slug": "telefony-i-svyaz",      "label": "Телефоны и связь",       "category_id": 5},
-    {"slug": "mebel-i-inter-er",      "label": "Мебель и интерьер",      "category_id": 6},
-    {"slug": "produkty-pitaniya",     "label": "Продукты питания",       "category_id": 7},
-    {"slug": "tehnika-v-bytu",        "label": "Техника в быту",         "category_id": 8},
-    {"slug": "odezhda-obuv-i-dr",     "label": "Одежда, обувь и др.",    "category_id": 9},
-    {"slug": "stroitel-stvo",         "label": "Строительство",          "category_id": 10},
-    {"slug": "nematerial-nye",        "label": "Нематериальные",         "category_id": 11},
-    {"slug": "pravo-arendy-i-uslugi", "label": "Право аренды и услуги",  "category_id": 167},
-    {"slug": "zhivotnye-i-rasteniya", "label": "Животные и растения",    "category_id": 164},
+    {"slug": "nedvizhimost",          "label": "Недвижимость",          "category_id": 1},
+    {"slug": "transport-i-zapchasti", "label": "Транспорт и запчасти",  "category_id": 2},
+    {"slug": "oborudovanie",          "label": "Оборудование",          "category_id": 3},
+    {"slug": "komp-yutery",           "label": "Компьютеры",            "category_id": 4},
+    {"slug": "telefony-i-svyaz",      "label": "Телефоны и связь",      "category_id": 5},
+    {"slug": "mebel-i-inter-er",      "label": "Мебель и интерьер",     "category_id": 6},
+    {"slug": "produkty-pitaniya",     "label": "Продукты питания",      "category_id": 7},
+    {"slug": "tehnika-v-bytu",        "label": "Техника в быту",        "category_id": 8},
+    {"slug": "odezhda-obuv-i-dr",     "label": "Одежда, обувь и др.",   "category_id": 9},
+    {"slug": "stroitel-stvo",         "label": "Строительство",         "category_id": 10},
+    {"slug": "nematerial-nye",        "label": "Нематериальные",        "category_id": 11},
+    {"slug": "pravo-arendy-i-uslugi", "label": "Право аренды и услуги", "category_id": 167},
+    {"slug": "zhivotnye-i-rasteniya", "label": "Животные и растения",   "category_id": 164},
 ]
 
 _TOP_IDS = set(range(1, 14)) | {164, 167}
-# Ссылки в HTML приходят с URL-encoded символами: /catalog/{slug}/1/%3Fcategory%3D{id}
-# НЕ используем unquote() на href — берём raw значение из атрибута
-_CAT_PAT = re.compile(r"/catalog/([a-z0-9-]+)/(\d+)/(?:\?|%3F)category(?:=|%3D)(\d+)", re.I)
+_CAT_PAT = re.compile(r"/catalog/([a-z0-9-]+)/1/%3Fcategory%3D(\d+)")
 
 
 def parse_top_categories() -> list[dict]:
     """
-    Парсит верхнеуровневые категории с главной страницы через Worker.
-    При недоступности возвращает _FALLBACK_CATEGORIES.
+    Парсит категории с главной страницы (SSR nav-меню через Worker).
+    Ищет ссылки вида /catalog/{slug}/1/%3Fcategory%3D{id} — именно
+    в таком URL-encoded виде они присутствуют в HTML.
+    При неудаче возвращает _FALLBACK_CATEGORIES.
     """
     print("[→] Парсю категории torgi.gov.by…")
     soup = get_soup(BASE_URL + "/")
@@ -147,7 +140,6 @@ def parse_top_categories() -> list[dict]:
 
     def add(slug: str, cat_id: int, label: str) -> None:
         label = re.sub(r"\s*\d+\s*$", "", label).strip()
-        label = re.sub(r"\s*\(\d+\)\s*$", "", label).strip()
         if not label or len(label) > 120:
             return
         key = (slug, cat_id)
@@ -155,46 +147,42 @@ def parse_top_categories() -> list[dict]:
             seen.add(key)
             categories.append({"slug": slug, "label": label, "category_id": cat_id})
 
-    # Стратегия 1: nav.main_category
-    nav = soup.find("nav", class_="main_category")
-    if nav:
-        for a in nav.find_all("a", href=True):
+    # Стратегия 1: ищем ссылки с %3F (encoded ?) в href — именно так они в HTML
+    for a in soup.find_all("a", href=True):
+        href = a["href"]  # НЕ unquote — ссылки хранятся в encoded виде
+        m = _CAT_PAT.search(href)
+        if not m:
+            continue
+        cat_id = int(m.group(2))
+        if cat_id not in _TOP_IDS:
+            continue
+        # Пропускаем подкатегории
+        if a.find_parent("li", class_="main_category_mnu_sub_item"):
+            continue
+        if a.find_parent("ul", class_="main_category_mnu_sub"):
+            continue
+        add(m.group(1), cat_id, _clean(a.get_text()))
+
+    print(f"  [i] Стратегия 1 (%3F encoded): {len(categories)} категорий")
+
+    # Стратегия 2: unquote + обычный ?category= (на случай если сервер вернёт иначе)
+    if not categories:
+        pat2 = re.compile(r"/catalog/([a-z0-9-]+)/1/\?category=(\d+)")
+        for a in soup.find_all("a", href=True):
+            href = unquote(a["href"])
+            m = pat2.search(href)
+            if not m:
+                continue
+            cat_id = int(m.group(2))
+            if cat_id not in _TOP_IDS:
+                continue
             if a.find_parent("li", class_="main_category_mnu_sub_item"):
                 continue
-            if a.find_parent("ul", class_="main_category_mnu_sub"):
-                continue
-            m = _CAT_PAT.search(a["href"])   # RAW href, не unquote
-            if m:
-                add(m.group(1), int(m.group(3)), _clean(a.get_text()))
-    print(f"  [i] Стратегия 1 (nav.main_category): {len(categories)} категорий")
-
-    # Стратегия 2: мобильное меню div#mm-1
-    if not categories:
-        mm1 = soup.find("div", id="mm-1")
-        if mm1:
-            ul = mm1.find("ul", class_="mm-listview")
-            if ul:
-                for li in ul.find_all("li", recursive=False):
-                    if li.get("class"):
-                        continue
-                    a = li.find("a", href=True)
-                    if not a:
-                        continue
-                    m = _CAT_PAT.search(a["href"])   # RAW href
-                    if m:
-                        add(m.group(1), int(m.group(3)), _clean(a.get_text()))
-        print(f"  [i] Стратегия 2 (mm-1): {len(categories)} категорий")
-
-    # Стратегия 3: фильтр по TOP_IDS — все ссылки в документе
-    if not categories:
-        for a in soup.find_all("a", href=True):
-            m = _CAT_PAT.search(a["href"])   # RAW href
-            if m and int(m.group(3)) in _TOP_IDS:
-                add(m.group(1), int(m.group(3)), _clean(a.get_text()))
-        print(f"  [i] Стратегия 3 (TOP_IDS): {len(categories)} категорий")
+            add(m.group(1), cat_id, _clean(a.get_text()))
+        print(f"  [i] Стратегия 2 (unquoted): {len(categories)} категорий")
 
     if not categories:
-        print("[!] Все стратегии не дали результат — использую резервные категории")
+        print("[!] Категории не найдены в HTML — использую резервные")
         return list(_FALLBACK_CATEGORIES)
 
     print(f"[✓] Категорий top-level: {len(categories)}")
@@ -204,192 +192,162 @@ def parse_top_categories() -> list[dict]:
 
 
 # ════════════════════════════════════════════════════════════
-# КАТАЛОГ — СПИСОК ЛОТОВ
+# API: ПОЛУЧЕНИЕ ЛОТОВ
 # ════════════════════════════════════════════════════════════
 
-def extract_lot_urls(soup: BeautifulSoup) -> list[str]:
+def _lot_id(raw: dict) -> str:
+    """Извлекает ID лота из JSON-объекта API."""
+    return str(raw.get("id") or raw.get("lotId") or raw.get("lot_id") or "")
+
+
+def _make_lot_url(raw: dict) -> str:
+    lot_id     = raw.get("id")     or raw.get("lotId")     or ""
+    auction_id = raw.get("auctionId") or raw.get("auction_id") or raw.get("saleId") or ""
+    url_slug   = raw.get("urlName") or raw.get("slug") or raw.get("nameUrl") or ""
+    if url_slug:
+        return f"{BASE_URL}/lot/{lot_id}/{auction_id}/{url_slug}"
+    return f"{BASE_URL}/lot/{lot_id}/{auction_id}/"
+
+
+def _format_price(val) -> str:
+    if val is None or val == "":
+        return ""
+    try:
+        num = float(str(val).replace(" ", "").replace(",", "."))
+        # Форматируем с пробелами-разделителями тысяч
+        int_part, dec_part = f"{num:.2f}".split(".")
+        int_fmt = ""
+        for i, ch in enumerate(reversed(int_part)):
+            if i and i % 3 == 0:
+                int_fmt = " " + int_fmt
+            int_fmt = ch + int_fmt
+        return f"{int_fmt}.{dec_part} BYN"
+    except (ValueError, TypeError):
+        return str(val)
+
+
+def normalize_lot(raw: dict, slug: str) -> dict:
+    """Нормализует объект лота из API в единый формат."""
+    return {
+        "lot_id":   _lot_id(raw),
+        "url":      _make_lot_url(raw),
+        "slug":     slug,
+        "title":    str(raw.get("name")         or raw.get("title")       or raw.get("lotName")   or ""),
+        "category": str(raw.get("categoryName") or raw.get("category")    or raw.get("categoryTitle") or ""),
+        "region":   str(raw.get("regionName")   or raw.get("region")      or raw.get("regionTitle")   or ""),
+        "location": str(raw.get("address")      or raw.get("location")    or raw.get("lotAddress")    or ""),
+        "price":    _format_price(raw.get("startPrice") or raw.get("price") or raw.get("startCost") or ""),
+    }
+
+
+def fetch_lots_page(category_id: int, slug: str, page: int = 0, pagesize: int = 50) -> tuple[list[dict], int]:
     """
-    Stored-формат: "torgi.gov.by/lot/{lot_id}/{auction_id}/"
-    Лоты в HTML могут иметь slug-суффикс:
-      /lot/110430/33161/stanok-shinomontazhnyj/
-    Нормализуем до canonical: /lot/110430/33161/
+    Запрашивает одну страницу лотов через Worker /api-lots.
+    Возвращает (список нормализованных лотов, totalPages).
     """
-    urls, seen = [], set()
-    for a in soup.find_all("a", href=True):
-        raw = a["href"]   # RAW, не unquote
-        if "/lot/" not in raw:
-            continue
-        if raw.startswith(BASE_URL):
-            path = raw[len(BASE_URL):]
-        elif raw.startswith("/"):
-            path = raw
-        else:
-            continue
-        path = path.split("?")[0].split("%3F")[0].split("#")[0]
-        m = _LOT_URL_RE.match(path)
-        if not m:
-            continue
-        # Нормализуем: берём только /lot/{lot_id}/{auction_id}/
-        stored = f"torgi.gov.by/lot/{m.group(1)}/{m.group(2)}/"
-        if stored not in seen:
-            seen.add(stored)
-            urls.append(stored)
-    return urls
+    data = _worker_get("api-lots", {
+        "category": category_id,
+        "page":     page,
+        "pagesize": pagesize,
+    })
 
+    if data is None:
+        print(f"  [!] api-lots: нет ответа от Worker")
+        return [], 0
 
-def build_catalog_url(slug: str, category_id: int, page: int = 1) -> str:
-    # Сайт использует %3F и %3D вместо ? и = в ссылках каталога
-    return f"{BASE_URL}/catalog/{slug}/{page}/%3Fcategory%3D{category_id}"
+    # Разбираем ответ — несколько вариантов структуры
+    if isinstance(data, list):
+        # Простой массив лотов
+        raw_lots   = data
+        total_pages = 1
+    elif isinstance(data, dict):
+        # Обёртка с пагинацией
+        raw_lots   = (data.get("lots") or data.get("content") or
+                      data.get("items") or data.get("data") or [])
+        total_el   = (data.get("totalElements") or data.get("total") or
+                      data.get("totalCount") or len(raw_lots))
+        total_pages = (data.get("totalPages") or data.get("pages") or
+                       (int(total_el) + pagesize - 1) // pagesize)
+        if not isinstance(raw_lots, list):
+            print(f"  [!] Неожиданная структура ответа: {list(data.keys())}")
+            print(f"      Первые 300 символов: {str(data)[:300]}")
+            return [], 0
+    else:
+        print(f"  [!] Неожиданный тип ответа: {type(data)}")
+        return [], 0
 
-
-def get_next_page_url(soup: BeautifulSoup, current_url: str) -> str | None:
-    m = re.search(r"/catalog/[^/]+/(\d+)/", current_url)
-    cur = int(m.group(1)) if m else 1
-
-    for a in soup.find_all("a", href=True):
-        cls  = " ".join(a.get("class", []))
-        text = a.get_text(strip=True)
-        raw  = a["href"]   # RAW — не unquote
-        if any(x in cls for x in ["next", "forward"]) or text in (">", "»", "Следующая"):
-            return urljoin(BASE_URL, raw)
-
-    # Ищем ссылку на страницу cur+1 в той же категории
-    slug_m = re.search(r"/catalog/([^/]+)/\d+/", current_url)
-    if slug_m:
-        slug = slug_m.group(1)
-        next_pattern = f"/catalog/{slug}/{cur + 1}/"
-        for a in soup.find_all("a", href=True):
-            if next_pattern in a["href"]:   # RAW href
-                return urljoin(BASE_URL, a["href"])
-    return None
+    lots = [normalize_lot(r, slug) for r in raw_lots if _lot_id(r)]
+    return lots, int(total_pages)
 
 
 # ════════════════════════════════════════════════════════════
 # АЛГОРИТМ НОВЫХ ЛОТОВ
+# ID лотов монотонно возрастают — сравниваем множествами.
 # ════════════════════════════════════════════════════════════
 
-def find_new_lots(
-    daily_paths: list[str],
-    snapshot: dict[str, int],
-    seq_window: int = None,
-    seq_min_matches: int = None,
-) -> list[str]:
-    if seq_window is None:
-        seq_window = cfg.SEQ_WINDOW
-    if seq_min_matches is None:
-        seq_min_matches = cfg.SEQ_MIN_MATCHES
-
-    new_paths: list[str] = []
-    i = 0
-    n = len(daily_paths)
-
-    while i < n:
-        path = daily_paths[i]
-        if path not in snapshot:
-            new_paths.append(path)
-            i += 1
+def find_new_lots_by_id(
+    fetched_lots: list[dict],
+    known_ids: set[str],
+) -> list[dict]:
+    """
+    Возвращает лоты чьи lot_id отсутствуют в known_ids.
+    Лоты уже отсортированы по убыванию новизны (sort1=approvetime).
+    Останавливаемся при первом известном ID — это признак что
+    все последующие тоже известны.
+    """
+    new_lots = []
+    for lot in fetched_lots:
+        lid = lot["lot_id"]
+        if not lid:
             continue
-
-        anchor_rank = snapshot[path]
-        window = daily_paths[i + 1: i + 1 + seq_window]
-        window_known = [(snapshot[w], w) for w in window if w in snapshot]
-
-        matches = 0
-        prev_rank = anchor_rank
-        for rank, _ in window_known:
-            if rank > prev_rank:
-                matches += 1
-                prev_rank = rank
-                if matches >= seq_min_matches:
-                    break
-
-        effective_min = min(seq_min_matches, len(window_known))
-        if effective_min > 0 and matches >= effective_min:
-            print(f"  [⏹] Стоп: {matches} совпадений на «{path}»")
+        if lid in known_ids:
+            # Встретили известный — дальше только старые
             break
-        else:
-            new_paths.append(path)
-            i += 1
-
-    return new_paths
+        new_lots.append(lot)
+    return new_lots
 
 
 # ════════════════════════════════════════════════════════════
-# ДЕТАЛИ ЛОТА
+# ДАННЫЕ ЛОТА (страница лота — SSR)
+# Используется только если API не вернул достаточно полей.
 # ════════════════════════════════════════════════════════════
 
-def _lot_id_from_stored(stored: str) -> str:
-    m = re.search(r"/lot/(\d+)/", stored)
-    return m.group(1) if m else ""
+def _extract_lot_from_page(soup: BeautifulSoup, stored_url: str) -> dict:
+    """Парсит поля лота из SSR-страницы (fallback)."""
+    m = _LOT_URL_RE.search(stored_url)
+    lot_id = m.group(1) if m else ""
 
-
-def stored_to_url(stored: str) -> str:
-    if stored.startswith("https://"):
-        return stored
-    return "https://" + stored
-
-
-def _extract_table_part1(soup: BeautifulSoup) -> dict:
-    result = {"title": "", "category": "", "region": "", "location": ""}
-    table = soup.find("table", class_="detail_lot_part1")
-    if not table:
-        return result
-    for row in table.find_all("tr"):
-        cells = row.find_all(["td", "th"])
-        if len(cells) < 2:
-            continue
-        key = _clean(cells[0].get_text()).lower().rstrip(":")
-        val = _clean(cells[1].get_text())
-        if "наименование" in key:
-            result["title"] = val
-        elif "категория" in key:
-            result["category"] = val
-        elif key == "регион":
-            result["region"] = val
-        elif "местонахождение" in key or "местоположение" in key:
-            result["location"] = val
-    return result
-
-
-def _extract_price(soup: BeautifulSoup) -> str:
-    table = soup.find("table", class_="detail_lot_part2")
-    if not table:
-        return ""
-    for row in table.find_all("tr"):
-        cells = row.find_all(["td", "th"])
-        if len(cells) < 2:
-            continue
-        key = _clean(cells[0].get_text()).lower()
-        if "начальная цена единицы" in key:
-            raw = _clean(cells[1].get_text())
-            m = re.search(r"([\d][\d\s]*[.,]\d{2})\s*Руб", raw, re.I)
-            if m:
-                num_str = m.group(1).replace(" ", "").replace(",", ".")
-                try:
-                    num = float(num_str)
-                    return f"{num:,.2f}".replace(",", " ") + " BYN"
-                except ValueError:
-                    pass
-            return raw
-    return ""
-
-
-def parse_lot_details(stored: str) -> dict:
-    url = stored_to_url(stored)
-    empty = {
-        "url":      url,
-        "lot_id":   _lot_id_from_stored(stored),
-        "title":    "",
-        "category": "",
-        "region":   "",
-        "location": "",
-        "price":    "",
+    result = {
+        "lot_id": lot_id, "url": stored_url,
+        "title": "", "category": "", "region": "", "location": "", "price": "",
     }
-    soup = get_soup(url)
-    if soup is None:
-        empty["title"] = stored
-        return empty
-    d = dict(empty)
-    d.update(_extract_table_part1(soup))
-    d["price"] = _extract_price(soup)
-    return d
+
+    table1 = soup.find("table", class_="detail_lot_part1")
+    if table1:
+        for row in table1.find_all("tr"):
+            cells = row.find_all(["td", "th"])
+            if len(cells) < 2:
+                continue
+            key = _clean(cells[0].get_text()).lower().rstrip(":")
+            val = _clean(cells[1].get_text())
+            if "наименование" in key:   result["title"]    = val
+            elif "категория" in key:    result["category"] = val
+            elif key == "регион":       result["region"]   = val
+            elif "местонахожден" in key: result["location"] = val
+
+    table2 = soup.find("table", class_="detail_lot_part2")
+    if table2:
+        for row in table2.find_all("tr"):
+            cells = row.find_all(["td", "th"])
+            if len(cells) < 2:
+                continue
+            if "начальная цена единицы" in _clean(cells[0].get_text()).lower():
+                raw = _clean(cells[1].get_text())
+                m2  = re.search(r"([\d][\d\s]*[.,]\d{2})\s*Руб", raw, re.I)
+                if m2:
+                    result["price"] = _format_price(
+                        m2.group(1).replace(" ", "").replace(",", ".")
+                    )
+                else:
+                    result["price"] = raw
+    return result
