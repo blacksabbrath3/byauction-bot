@@ -30,8 +30,8 @@ import config as cfg
 
 BASE_URL = "https://torgi.gov.by"
 
-# Шаблон URL лота: /lot/{lot_id}/{auction_id}/
-_LOT_URL_RE = re.compile(r"^/lot/(\d+)/(\d+)/$")
+# URL лота: /lot/{lot_id}/{auction_id}/ или /lot/{lot_id}/{auction_id}/{slug}/
+_LOT_URL_RE = re.compile(r"^/lot/(\d+)/(\d+)(?:/[^/?#]*)?/?$")
 
 # Сессия для запросов к Worker'у (не к torgi.gov.by напрямую)
 _SESSION = requests.Session()
@@ -126,7 +126,9 @@ _FALLBACK_CATEGORIES = [
 ]
 
 _TOP_IDS = set(range(1, 14)) | {164, 167}
-_CAT_PAT = re.compile(r"/catalog/([a-z0-9-]+)/1/\?category=(\d+)")
+# Ссылки в HTML приходят с URL-encoded символами: /catalog/{slug}/1/%3Fcategory%3D{id}
+# НЕ используем unquote() на href — берём raw значение из атрибута
+_CAT_PAT = re.compile(r"/catalog/([a-z0-9-]+)/(\d+)/(?:\?|%3F)category(?:=|%3D)(\d+)", re.I)
 
 
 def parse_top_categories() -> list[dict]:
@@ -161,9 +163,9 @@ def parse_top_categories() -> list[dict]:
                 continue
             if a.find_parent("ul", class_="main_category_mnu_sub"):
                 continue
-            m = _CAT_PAT.search(unquote(a["href"]))
+            m = _CAT_PAT.search(a["href"])   # RAW href, не unquote
             if m:
-                add(m.group(1), int(m.group(2)), _clean(a.get_text()))
+                add(m.group(1), int(m.group(3)), _clean(a.get_text()))
     print(f"  [i] Стратегия 1 (nav.main_category): {len(categories)} категорий")
 
     # Стратегия 2: мобильное меню div#mm-1
@@ -178,17 +180,17 @@ def parse_top_categories() -> list[dict]:
                     a = li.find("a", href=True)
                     if not a:
                         continue
-                    m = _CAT_PAT.search(unquote(a["href"]))
+                    m = _CAT_PAT.search(a["href"])   # RAW href
                     if m:
-                        add(m.group(1), int(m.group(2)), _clean(a.get_text()))
+                        add(m.group(1), int(m.group(3)), _clean(a.get_text()))
         print(f"  [i] Стратегия 2 (mm-1): {len(categories)} категорий")
 
-    # Стратегия 3: фильтр по TOP_IDS
+    # Стратегия 3: фильтр по TOP_IDS — все ссылки в документе
     if not categories:
         for a in soup.find_all("a", href=True):
-            m = _CAT_PAT.search(unquote(a["href"]))
-            if m and int(m.group(2)) in _TOP_IDS:
-                add(m.group(1), int(m.group(2)), _clean(a.get_text()))
+            m = _CAT_PAT.search(a["href"])   # RAW href
+            if m and int(m.group(3)) in _TOP_IDS:
+                add(m.group(1), int(m.group(3)), _clean(a.get_text()))
         print(f"  [i] Стратегия 3 (TOP_IDS): {len(categories)} категорий")
 
     if not categories:
@@ -206,22 +208,29 @@ def parse_top_categories() -> list[dict]:
 # ════════════════════════════════════════════════════════════
 
 def extract_lot_urls(soup: BeautifulSoup) -> list[str]:
-    """Stored-формат: "torgi.gov.by/lot/{lot_id}/{auction_id}/" """
+    """
+    Stored-формат: "torgi.gov.by/lot/{lot_id}/{auction_id}/"
+    Лоты в HTML могут иметь slug-суффикс:
+      /lot/110430/33161/stanok-shinomontazhnyj/
+    Нормализуем до canonical: /lot/110430/33161/
+    """
     urls, seen = [], set()
     for a in soup.find_all("a", href=True):
-        href = unquote(a["href"])
-        if href.startswith(BASE_URL):
-            path = href[len(BASE_URL):]
-        elif href.startswith("/"):
-            path = href
+        raw = a["href"]   # RAW, не unquote
+        if "/lot/" not in raw:
+            continue
+        if raw.startswith(BASE_URL):
+            path = raw[len(BASE_URL):]
+        elif raw.startswith("/"):
+            path = raw
         else:
             continue
-        path = path.split("?")[0].split("#")[0]
-        if not path.endswith("/"):
-            path += "/"
-        if not _LOT_URL_RE.fullmatch(path):
+        path = path.split("?")[0].split("%3F")[0].split("#")[0]
+        m = _LOT_URL_RE.match(path)
+        if not m:
             continue
-        stored = "torgi.gov.by" + path
+        # Нормализуем: берём только /lot/{lot_id}/{auction_id}/
+        stored = f"torgi.gov.by/lot/{m.group(1)}/{m.group(2)}/"
         if stored not in seen:
             seen.add(stored)
             urls.append(stored)
@@ -229,7 +238,8 @@ def extract_lot_urls(soup: BeautifulSoup) -> list[str]:
 
 
 def build_catalog_url(slug: str, category_id: int, page: int = 1) -> str:
-    return f"{BASE_URL}/catalog/{slug}/{page}/?category={category_id}"
+    # Сайт использует %3F и %3D вместо ? и = в ссылках каталога
+    return f"{BASE_URL}/catalog/{slug}/{page}/%3Fcategory%3D{category_id}"
 
 
 def get_next_page_url(soup: BeautifulSoup, current_url: str) -> str | None:
@@ -239,17 +249,18 @@ def get_next_page_url(soup: BeautifulSoup, current_url: str) -> str | None:
     for a in soup.find_all("a", href=True):
         cls  = " ".join(a.get("class", []))
         text = a.get_text(strip=True)
-        href = unquote(a["href"])
+        raw  = a["href"]   # RAW — не unquote
         if any(x in cls for x in ["next", "forward"]) or text in (">", "»", "Следующая"):
-            return urljoin(BASE_URL, href)
+            return urljoin(BASE_URL, raw)
 
+    # Ищем ссылку на страницу cur+1 в той же категории
     slug_m = re.search(r"/catalog/([^/]+)/\d+/", current_url)
     if slug_m:
         slug = slug_m.group(1)
         next_pattern = f"/catalog/{slug}/{cur + 1}/"
         for a in soup.find_all("a", href=True):
-            if next_pattern in unquote(a["href"]):
-                return urljoin(BASE_URL, unquote(a["href"]))
+            if next_pattern in a["href"]:   # RAW href
+                return urljoin(BASE_URL, a["href"])
     return None
 
 
