@@ -15,6 +15,9 @@
 //   POST /add-lots            → {slug, paths: [...]}
 //   POST /save-daily-lots     → {date, slug, lots: [...], ttl}
 //   POST /send-notifications  → {date, slug}
+//   POST /fetch-page          → {url} → {ok, status, html}
+//     Ретранслятор: Worker делает fetch() от имени Cloudflare edge,
+//     который имеет доступ к torgi.gov.by в отличие от GitHub Actions IP.
 // ============================================================
 
 import { matchKeywords }                        from "../../shared/matchKeyword.js";
@@ -217,6 +220,59 @@ async function handleSendNotifications(body, env) {
   return jsonResponse({ ok: true, sent });
 }
 
+// ── /fetch-page — ретранслятор запросов к torgi.gov.by ───────
+// GitHub Actions IP заблокированы на torgi.gov.by на сетевом уровне.
+// Cloudflare Worker fetch() идёт через edge-серверы Cloudflare (в т.ч. RU),
+// которые имеют доступ к сайту.
+
+const ALLOWED_HOST = "torgi.gov.by";
+
+async function handleFetchPage(body) {
+  const { url } = body || {};
+
+  if (!url || typeof url !== "string") {
+    return new Response(JSON.stringify({ ok: false, error: "Missing url" }),
+      { status: 400, headers: { "Content-Type": "application/json" } });
+  }
+
+  // Разрешаем только torgi.gov.by во избежание использования как open proxy
+  let parsed;
+  try { parsed = new URL(url); } catch {
+    return new Response(JSON.stringify({ ok: false, error: "Invalid url" }),
+      { status: 400, headers: { "Content-Type": "application/json" } });
+  }
+  if (parsed.hostname !== ALLOWED_HOST) {
+    return new Response(JSON.stringify({ ok: false, error: `Only ${ALLOWED_HOST} allowed` }),
+      { status: 403, headers: { "Content-Type": "application/json" } });
+  }
+
+  try {
+    const resp = await fetch(url, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "ru-RU,ru;q=0.9,en;q=0.5",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Connection": "keep-alive",
+        "Upgrade-Insecure-Requests": "1",
+      },
+      redirect: "follow",
+      cf: { cacheTtl: 0 },   // не кешировать в CF — нам нужны свежие данные
+    });
+
+    const html = await resp.text();
+    return new Response(
+      JSON.stringify({ ok: true, status: resp.status, html }),
+      { headers: { "Content-Type": "application/json" } }
+    );
+  } catch (e) {
+    return new Response(
+      JSON.stringify({ ok: false, error: e.message }),
+      { status: 502, headers: { "Content-Type": "application/json" } }
+    );
+  }
+}
+
 // ── Fetch handler ─────────────────────────────────────────────
 
 export default {
@@ -240,6 +296,7 @@ export default {
       if (method === "POST" && path === "/add-lots")           return handleAddLots(body, env);
       if (method === "POST" && path === "/save-daily-lots")    return handleSaveDailyLots(body, env);
       if (method === "POST" && path === "/send-notifications") return handleSendNotifications(body, env);
+      if (method === "POST" && path === "/fetch-page")         return handleFetchPage(body);
 
       return new Response("Not Found", { status: 404 });
     } catch (e) {
