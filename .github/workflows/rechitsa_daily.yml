@@ -1,0 +1,32 @@
+name: Rechitsa Daily Parser
+
+on:
+  schedule:
+    - cron: '0 2 * * *'   # 02:00 UTC (05:00 Минск)
+  workflow_dispatch:       # ручной запуск — задержка пропускается автоматически
+
+jobs:
+  parse:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install requests beautifulsoup4 lxml
+
+      - name: Run parser
+        env:
+          RECHITSA_WORKER_URL: ${{ secrets.RECHITSA_WORKER_URL }}
+          PARSER_SECRET:       ${{ secrets.PARSER_SECRET }}
+          SKIP_RANDOM_DELAY:   ${{ github.event_name == 'workflow_dispatch' && 'true' || 'false' }}
+        run: |
+          cd parser
+          python rechitsa_daily.py

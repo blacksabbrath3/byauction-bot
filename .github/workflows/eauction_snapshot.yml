@@ -1,0 +1,30 @@
+name: eauction_snapshot
+
+on:
+  workflow_dispatch:
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4.2.2
+
+      - name: Set up Python
+        uses: actions/setup-python@v5.6.0
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install requests beautifulsoup4
+
+      - name: Run snapshot
+        env:
+          WORKER_URL:    ${{ secrets.WORKER_URL }}
+          PARSER_SECRET: ${{ secrets.PARSER_SECRET }}
+        working-directory: parser
+        run: python eauction_snapshot.py

@@ -1,0 +1,8 @@
+{
+  "name": "auction-monitors",
+  "private": true,
+  "devDependencies": {
+    "wrangler": "^4"
+  }
+}
+

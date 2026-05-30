@@ -1,0 +1,35 @@
+name: E-Auction Daily Parser
+
+on:
+  schedule:
+    - cron: '0 2 * * *'   # 02:00 UTC (05:00 Минск)
+  workflow_dispatch:       # ручной запуск — задержка пропускается автоматически
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  parse:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360   # 6 часов — достаточно для задержки + парсинга
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4.2.2
+
+      - name: Set up Python
+        uses: actions/setup-python@v5.6.0
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install requests beautifulsoup4
+
+      - name: Run parser
+        env:
+          WORKER_URL:          ${{ secrets.WORKER_URL }}
+          PARSER_SECRET:       ${{ secrets.PARSER_SECRET }}
+          # При ручном запуске пропускаем рандомную задержку
+          SKIP_RANDOM_DELAY:   ${{ github.event_name == 'workflow_dispatch' && 'true' || 'false' }}
+        working-directory: parser
+        run: python eauction_daily.py

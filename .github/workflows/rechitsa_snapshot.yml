@@ -1,0 +1,28 @@
+name: Rechitsa Snapshot
+
+on:
+  workflow_dispatch:   # только вручную, один раз перед первым запуском парсера
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install requests beautifulsoup4 lxml
+
+      - name: Run rechitsa snapshot
+        env:
+          RECHITSA_WORKER_URL: ${{ secrets.RECHITSA_WORKER_URL }}
+          PARSER_SECRET:       ${{ secrets.PARSER_SECRET }}
+        run: |
+          cd parser
+          python rechitsa_snapshot.py

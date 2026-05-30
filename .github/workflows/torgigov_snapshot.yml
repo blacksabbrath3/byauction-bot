@@ -1,0 +1,32 @@
+name: Torgigov Snapshot
+
+on:
+  workflow_dispatch:   # только ручной запуск (первый раз и при необходимости)
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4.2.2
+
+      - name: Set up Python
+        uses: actions/setup-python@v5.6.0
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install requests beautifulsoup4
+
+      - name: Run snapshot
+        env:
+          TORGIGOV_WORKER_URL: ${{ secrets.TORGIGOV_WORKER_URL }}
+          PARSER_SECRET:       ${{ secrets.PARSER_SECRET }}
+          SKIP_RANDOM_DELAY:   "true"
+        working-directory: parser
+        run: python torgigov_snapshot.py

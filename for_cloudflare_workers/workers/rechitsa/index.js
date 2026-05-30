@@ -1,0 +1,109 @@
+// ============================================================
+// workers/rechitsa/index.js — API для парсера rechitsa.by/gosim
+//
+// Bindings (Cloudflare Worker Settings):
+//   KV:      RECHITSA_STORAGE → rechitsa_storage
+//            SUBSCRIBERS      → bot_subscribers
+//   Secrets: BOT_TOKEN, PARSER_SECRET
+// ============================================================
+
+import { matchKeywords }                        from "../../shared/matchKeyword.js";
+import { sendNotifications }                    from "../../shared/subscribers.js";
+import { escapeHtml, jsonResponse, checkAuth }  from "../../shared/format.js";
+
+// ── Матчинг ───────────────────────────────────────────────────
+
+function matchArticle(article, sub) {
+  if (sub.source !== "rechitsa") return false;
+
+  const text = [article.title, article.full_text || article.excerpt]
+    .join(" ").toLowerCase();
+
+  return matchKeywords(text, sub.keywords);
+}
+
+// ── Форматирование ────────────────────────────────────────────
+
+function formatArticleMessage(article) {
+  let msg = `📋 <a href="${article.url}">${escapeHtml(article.title)}</a>`;
+  if (article.date)    msg += `\n📅 ${escapeHtml(article.date)}`;
+  if (article.excerpt) msg += `\n\n${escapeHtml(article.excerpt)}`;
+  return msg;
+}
+
+// ── Handlers ──────────────────────────────────────────────────
+
+async function handleGetKnownArticles(env) {
+  const raw = await env.RECHITSA_STORAGE.get("known_articles");
+  return jsonResponse({ articles: raw ? JSON.parse(raw) : [] });
+}
+
+async function handleAddArticles(body, env) {
+  const { urls } = body;
+  if (!Array.isArray(urls)) return new Response("Bad request", { status: 400 });
+
+  const raw      = await env.RECHITSA_STORAGE.get("known_articles");
+  const existing = new Set(raw ? JSON.parse(raw) : []);
+  const newOnes  = urls.filter(u => !existing.has(u));
+  const merged   = [...newOnes, ...existing];
+
+  await env.RECHITSA_STORAGE.put("known_articles", JSON.stringify(merged));
+  return jsonResponse({ ok: true, added: newOnes.length, total: merged.length });
+}
+
+async function handleSaveDailyArticles(body, env) {
+  const { date, articles, ttl } = body;
+  if (!date || !Array.isArray(articles)) return new Response("Bad request", { status: 400 });
+
+  await env.RECHITSA_STORAGE.put(
+    `daily_articles:${date}`,
+    JSON.stringify(articles),
+    { expirationTtl: ttl || 86400 }
+  );
+  return jsonResponse({ ok: true, count: articles.length });
+}
+
+async function handleSendNotifications(body, env) {
+  const { date } = body;
+  if (!date) return new Response("Missing date", { status: 400 });
+
+  const raw = await env.RECHITSA_STORAGE.get(`daily_articles:${date}`);
+  if (!raw) return jsonResponse({ ok: true, sent: 0, reason: "no articles" });
+
+  const articles = JSON.parse(raw);
+  const items    = articles.map(article => ({
+    text:    formatArticleMessage(article),
+    matchFn: sub => matchArticle(article, sub),
+  }));
+
+  const sent = await sendNotifications(items, env.SUBSCRIBERS, env.BOT_TOKEN);
+  return jsonResponse({ ok: true, sent });
+}
+
+// ── Fetch handler ─────────────────────────────────────────────
+
+export default {
+  async fetch(request, env) {
+    try {
+      if (!checkAuth(request, env)) return new Response("Unauthorized", { status: 401 });
+
+      const url    = new URL(request.url);
+      const path   = url.pathname;
+      const method = request.method;
+
+      if (method === "GET" && path === "/known-articles") return handleGetKnownArticles(env);
+
+      const body = await request.json().catch(() => null);
+      if (!body) return new Response("Bad JSON", { status: 400 });
+
+      if (method === "POST" && path === "/add-articles")        return handleAddArticles(body, env);
+      if (method === "POST" && path === "/save-daily-articles") return handleSaveDailyArticles(body, env);
+      if (method === "POST" && path === "/send-notifications")  return handleSendNotifications(body, env);
+
+      return new Response("Not Found", { status: 404 });
+    } catch (e) {
+      console.error("CRASH:", e.message, e.stack);
+      return new Response("Internal Error", { status: 500 });
+    }
+  },
+};
