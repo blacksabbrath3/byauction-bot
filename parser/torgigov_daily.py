@@ -3,7 +3,8 @@ torgigov_daily.py — ежедневный парсер новых лотов to
 
 Алгоритм:
   1. GET /torgigov/known-lots  → {slug: [path, ...]}
-  2. Категории из torgigov_lib.TOP_CATEGORIES (хардкод — Angular SPA)
+  2. GET /torgigov/categories  → список из KV (snapshot кладёт туда раз в месяц)
+     Если KV пуст — парсим категории напрямую с сайта через прокси
   3. По каждой категории парсим страницы каталога, ищем новые лоты
   4. POST /torgigov/add-lots   → добавляем новые пути в known_lots
   5. Парсим детали новых лотов → POST /torgigov/save-daily-lots
@@ -316,9 +317,16 @@ def main() -> None:
     for slug, v in known_all.items():
         print(f"    {slug:40s}: {len(v)} известных")
 
-    # 2. Категории из хардкода
-    categories = lib.TOP_CATEGORIES
-    print(f"\n[2] Категорий: {len(categories)} (хардкод)")
+    # 2. Загружаем категории из KV (туда snapshot кладёт актуальный список)
+    print("\n[2] Загружаю категории…")
+    categories = fetch_categories()
+    if not categories:
+        print("    [!] KV пуст, парсю категории напрямую…")
+        categories = lib.parse_top_categories()
+    if not categories:
+        print("[!] Категории не получены — прерываю")
+        sys.exit(1)
+    print(f"    Категорий: {len(categories)}")
 
     total_new = 0
     slugs_with_new: list[str] = []
