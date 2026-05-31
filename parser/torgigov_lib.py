@@ -285,6 +285,16 @@ def fetch_lots_page(category_id: int, slug: str, page: int = 0, pagesize: int = 
     elif isinstance(data, dict):
         # Показываем все ключи верхнего уровня для диагностики
         print(f"  [dbg] Response keys: {list(data.keys())}")
+
+        # Проверяем на ошибку от Worker
+        if "message" in data and "status" in data and not any(
+            k in data for k in ("lots", "content", "items", "data")
+        ):
+            print(f"  [!] Worker вернул ошибку: {data.get('message')}")
+            tried = data.get("debug_tried", [])
+            if tried:
+                print(f"  [!] Пробовал URL: {tried}")
+            return [], 0
         raw_lots   = (data.get("lots") or data.get("content") or
                       data.get("items") or data.get("data") or [])
         total_el   = (data.get("totalElements") or data.get("total") or
