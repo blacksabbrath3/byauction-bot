@@ -148,15 +148,14 @@ function formatLotMessage(lot) {
 async function handleApiLots(request) {
   const inUrl    = new URL(request.url);
   const pagesize = parseInt(inUrl.searchParams.get("pagesize") || "50");
-  const params   = new URLSearchParams({
+
+  // Берём параметры напрямую из входящего запроса, добавляем только обязательные дефолты
+  const params = new URLSearchParams({
     onlyNotActive: "false",
     history:       "false",
     sort1:         "approvetime",
-    summary:       "false",
-    onlyTitle:     "false",
-    queries:       "",
-    ask1:          "1",
   });
+  // Параметры от парсера перезаписывают дефолты
   for (const [k, v] of inUrl.searchParams) {
     params.set(k, v);
   }
@@ -165,7 +164,11 @@ async function handleApiLots(request) {
 
   try {
     const resp = await fetch(apiUrl, { headers: API_HEADERS, cf: { cacheTtl: 0 } });
-    const data = await resp.json();
+    const text = await resp.text();
+
+    let data;
+    try { data = JSON.parse(text); }
+    catch { return jsonResponse({ ok: false, error: "non-JSON response", body: text.slice(0, 200), apiUrl }); }
 
     // Реальная структура: {"status":200,"result":{"lots":[...],"count":N}}
     const result     = data?.result ?? {};
@@ -173,41 +176,52 @@ async function handleApiLots(request) {
     const count      = result?.count ?? lots.length;
     const totalPages = Math.max(1, Math.ceil(count / pagesize));
 
-    return jsonResponse({ lots, count, totalPages });
+    // Логируем для диагностики
+    console.log(`api-lots: apiUrl=${apiUrl} status=${resp.status} count=${count}`);
+
+    return jsonResponse({ lots, count, totalPages, _debug_apiUrl: apiUrl, _debug_apiStatus: resp.status });
   } catch (e) {
-    return jsonResponse({ ok: false, error: String(e.message) }, 502);
+    return jsonResponse({ ok: false, error: String(e.message), apiUrl }, 502);
   }
 }
 
-// GET /debug-api — диагностика: пробует несколько URL и возвращает подробный отчёт
+// GET /debug-api
 async function handleDebugApi() {
   const results = [];
 
-  // Тест 1: один лот category=1 через /api/lots — чтобы увидеть полную структуру
+  // Тест 1: точный URL который уйдёт в api/lots для category=1
+  const params = new URLSearchParams({
+    onlyNotActive: "false", history: "false", sort1: "approvetime",
+    category: "1", page: "0", pagesize: "2",
+  });
+  const apiUrl = `${TORGI_API}/lots?${params.toString()}`;
+
   try {
-    const url  = `${TORGI_API}/lots?category=1&page=0&pagesize=1&onlyNotActive=false&history=false`;
-    const resp = await fetch(url, { headers: API_HEADERS, cf: { cacheTtl: 0 } });
-    const data = await resp.json();
-    const lot  = data?.result?.lots?.[0] ?? data?.lots?.[0] ?? null;
+    const resp = await fetch(apiUrl, { headers: API_HEADERS, cf: { cacheTtl: 0 } });
+    const text = await resp.text();
+    let parsed = null;
+    try { parsed = JSON.parse(text); } catch {}
     results.push({
-      test: "api_one_lot",
-      status: resp.status,
-      lot_keys: lot ? Object.keys(lot) : null,
-      lot_sample: lot,
-      total_count: data?.result?.count ?? data?.count ?? null,
-      total_pages: data?.result?.totalPages ?? data?.totalPages ?? null,
-      result_keys: data?.result ? Object.keys(data.result) : null,
+      test:       "api_lots_category1",
+      apiUrl,
+      httpStatus: resp.status,
+      rawBody:    text.slice(0, 600),
+      resultKeys: parsed?.result ? Object.keys(parsed.result) : null,
+      lotsCount:  parsed?.result?.lots?.length ?? parsed?.lots?.length ?? null,
+      totalCount: parsed?.result?.count ?? null,
     });
   } catch (e) {
-    results.push({ test: "api_one_lot", error: e.message });
+    results.push({ test: "api_lots_category1", apiUrl, error: e.message });
   }
 
-  // Тест 2: доступность torgi.gov.by главной
+  // Тест 2: без category — все лоты
+  const apiUrl2 = `${TORGI_API}/lots?page=0&pagesize=2&onlyNotActive=false&history=false`;
   try {
-    const resp = await fetch("https://torgi.gov.by/", { headers: API_HEADERS });
-    results.push({ test: "main_page", status: resp.status });
+    const resp2 = await fetch(apiUrl2, { headers: API_HEADERS, cf: { cacheTtl: 0 } });
+    const text2 = await resp2.text();
+    results.push({ test: "api_lots_all", apiUrl: apiUrl2, httpStatus: resp2.status, rawBody: text2.slice(0, 300) });
   } catch (e) {
-    results.push({ test: "main_page", error: e.message });
+    results.push({ test: "api_lots_all", error: e.message });
   }
 
   return jsonResponse({ results });
