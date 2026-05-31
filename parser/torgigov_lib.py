@@ -26,7 +26,6 @@ import config as cfg
 
 BASE_URL    = "https://torgi.gov.by"
 _SESSION    = requests.Session()
-_SESSION.headers.update({"Content-Type": "application/json"})
 
 # Шаблон URL лота: /lot/{lotId}/{auctionId}/
 _LOT_URL_RE = re.compile(r"/lot/(\d+)/(\d+)/")
@@ -276,12 +275,18 @@ def fetch_lots_page(category_id: int, slug: str, page: int = 0, pagesize: int = 
 
     for attempt in range(1, cfg.REQUEST_RETRIES + 1):
         try:
-            r = _SESSION.get(
+            r = requests.get(
                 url, params=params,
                 headers={"X-API-Key": cfg.PARSER_SECRET},
                 timeout=cfg.REQUEST_TIMEOUT,
             )
-            r.raise_for_status()
+            print(f"  [dbg] /api-lots HTTP {r.status_code} len={len(r.text)} body={r.text[:120]}")
+            if r.status_code >= 400:
+                print(f"  [!] api-lots HTTP {r.status_code}: {r.text[:300]}")
+                if attempt < cfg.REQUEST_RETRIES:
+                    time.sleep(cfg.RETRY_BASE_DELAY * attempt)
+                    continue
+                return [], 0
             data = r.json()
             break
         except requests.exceptions.JSONDecodeError as e:
