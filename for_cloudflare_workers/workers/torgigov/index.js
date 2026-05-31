@@ -158,23 +158,50 @@ async function handleApiLots(request) {
     ask1:          "1",
   });
 
-  // Прокидываем параметры от парсера
   for (const [k, v] of inUrl.searchParams) {
     params.set(k, v);
   }
 
-  const apiUrl = `${TORGI_API}/lots?${params.toString()}`;
+  // Пробуем несколько вариантов базового URL API
+  const candidates = [
+    `https://api.torgi.gov.by/api/lots?${params.toString()}`,
+    `https://api.torgi.gov.by:443/api/lots?${params.toString()}`,
+    `http://api.torgi.gov.by/api/lots?${params.toString()}`,
+  ];
 
-  try {
-    const resp = await fetch(apiUrl, { headers: API_HEADERS });
-    const body = await resp.text();
-    return new Response(body, {
-      status:  resp.status,
-      headers: { "Content-Type": "application/json; charset=utf-8" },
-    });
-  } catch (e) {
-    return jsonResponse({ ok: false, error: e.message }, 502);
+  const errors = [];
+
+  for (const apiUrl of candidates) {
+    try {
+      const resp = await fetch(apiUrl, {
+        headers: API_HEADERS,
+        cf: { cacheTtl: 0 },
+      });
+      const body = await resp.text();
+      // Логируем успешный URL для диагностики
+      const result = { _debug_url: apiUrl, _debug_status: resp.status, _raw: body };
+      // Пробуем вернуть сырой ответ API если он валидный JSON
+      try {
+        JSON.parse(body);
+        return new Response(body, {
+          status:  resp.status,
+          headers: { "Content-Type": "application/json; charset=utf-8" },
+        });
+      } catch {
+        return jsonResponse({ ok: false, error: "API returned non-JSON", body: body.slice(0, 200), url: apiUrl });
+      }
+    } catch (e) {
+      errors.push(`${apiUrl} → ${e.message}`);
+    }
   }
+
+  // Все варианты не сработали
+  return jsonResponse({
+    status: 400,
+    errorCode: "",
+    message: "Request failed: " + errors.join(" | "),
+    debug_tried: candidates,
+  });
 }
 
 // POST /fetch-page {url}
