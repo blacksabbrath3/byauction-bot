@@ -146,8 +146,9 @@ function formatLotMessage(lot) {
 
 // GET /api-lots?category=1&page=0&pagesize=50&...
 async function handleApiLots(request) {
-  const inUrl  = new URL(request.url);
-  const params = new URLSearchParams({
+  const inUrl    = new URL(request.url);
+  const pagesize = parseInt(inUrl.searchParams.get("pagesize") || "50");
+  const params   = new URLSearchParams({
     onlyNotActive: "false",
     history:       "false",
     sort1:         "approvetime",
@@ -156,7 +157,6 @@ async function handleApiLots(request) {
     queries:       "",
     ask1:          "1",
   });
-
   for (const [k, v] of inUrl.searchParams) {
     params.set(k, v);
   }
@@ -167,16 +167,15 @@ async function handleApiLots(request) {
     const resp = await fetch(apiUrl, { headers: API_HEADERS, cf: { cacheTtl: 0 } });
     const data = await resp.json();
 
-    // Реальная структура ответа: {"status":200,"result":{"lots":[...],"count":N}}
-    const result = data?.result ?? data;
-    const lots   = result?.lots ?? result?.content ?? result?.items ?? [];
-    const count  = result?.count ?? result?.totalElements ?? result?.total ?? lots.length;
-    const pagesize = parseInt(inUrl.searchParams.get("pagesize") || "50");
-    const totalPages = Math.ceil(count / pagesize) || 1;
+    // Реальная структура: {"status":200,"result":{"lots":[...],"count":N}}
+    const result     = data?.result ?? {};
+    const lots       = result?.lots ?? [];
+    const count      = result?.count ?? lots.length;
+    const totalPages = Math.max(1, Math.ceil(count / pagesize));
 
     return jsonResponse({ lots, count, totalPages });
   } catch (e) {
-    return jsonResponse({ ok: false, error: e.message }, 502);
+    return jsonResponse({ ok: false, error: String(e.message) }, 502);
   }
 }
 
@@ -197,6 +196,7 @@ async function handleDebugApi() {
       lot_sample: lot,
       total_count: data?.result?.count ?? data?.count ?? null,
       total_pages: data?.result?.totalPages ?? data?.totalPages ?? null,
+      result_keys: data?.result ? Object.keys(data.result) : null,
     });
   } catch (e) {
     results.push({ test: "api_one_lot", error: e.message });
