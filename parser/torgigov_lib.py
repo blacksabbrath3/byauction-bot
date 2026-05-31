@@ -243,13 +243,11 @@ def normalize_lot(raw: dict, slug: str) -> dict:
 def fetch_lots_page(category_id: int, slug: str, page: int = 0, pagesize: int = 50) -> tuple[list[dict], int]:
     """
     Запрашивает одну страницу лотов через Worker /api-lots.
-    Возвращает (список нормализованных лотов, totalPages).
+    Worker возвращает: {"lots": [...], "count": N, "totalPages": N}
     """
-    # Делаем запрос напрямую чтобы видеть сырой ответ при ошибке
-    url = f"{cfg.TORGIGOV_WORKER_URL}/api-lots"
+    url    = f"{cfg.TORGIGOV_WORKER_URL}/api-lots"
     params = {"category": category_id, "page": page, "pagesize": pagesize}
 
-    print(f"  [dbg] GET {url} params={params}")
     for attempt in range(1, cfg.REQUEST_RETRIES + 1):
         try:
             r = _SESSION.get(
@@ -257,13 +255,11 @@ def fetch_lots_page(category_id: int, slug: str, page: int = 0, pagesize: int = 
                 headers={"X-API-Key": cfg.PARSER_SECRET},
                 timeout=cfg.REQUEST_TIMEOUT,
             )
-            print(f"  [dbg] HTTP {r.status_code}, content-type={r.headers.get('content-type','?')}, len={len(r.text)}")
-            print(f"  [dbg] Body (first 500): {r.text[:500]}")
             r.raise_for_status()
             data = r.json()
             break
         except requests.exceptions.JSONDecodeError as e:
-            print(f"  [!] JSON decode error: {e}")
+            print(f"  [!] JSON decode error: {e}, body={r.text[:200]}")
             return [], 0
         except requests.RequestException as e:
             print(f"  [!] api-lots attempt {attempt}/{cfg.REQUEST_RETRIES}: {e}")
@@ -274,46 +270,23 @@ def fetch_lots_page(category_id: int, slug: str, page: int = 0, pagesize: int = 
     else:
         return [], 0
 
-    if data is None:
-        print(f"  [!] api-lots: нет ответа от Worker")
+    if not isinstance(data, dict):
+        print(f"  [!] Неожиданный тип ответа: {type(data)}")
         return [], 0
 
-    # Разбираем ответ — несколько вариантов структуры
-    if isinstance(data, list):
-        raw_lots    = data
-        total_pages = 1
-    elif isinstance(data, dict):
-        # Показываем все ключи верхнего уровня для диагностики
-        print(f"  [dbg] Response keys: {list(data.keys())}")
-
-        # Проверяем на ошибку от Worker
-        if "message" in data and "status" in data and not any(
-            k in data for k in ("lots", "content", "items", "data")
-        ):
-            print(f"  [!] Worker вернул ошибку: {data.get('message')}")
-            tried = data.get("debug_tried", [])
-            if tried:
-                print(f"  [!] Пробовал URL: {tried}")
-            return [], 0
-        raw_lots   = (data.get("lots") or data.get("content") or
-                      data.get("items") or data.get("data") or [])
-        total_el   = (data.get("totalElements") or data.get("total") or
-                      data.get("totalCount") or len(raw_lots))
-        total_pages = (data.get("totalPages") or data.get("pages") or
-                       (int(total_el) + pagesize - 1) // pagesize or 1)
-        if not isinstance(raw_lots, list):
-            print(f"  [!] Неожиданная структура: raw_lots={type(raw_lots)}, keys={list(data.keys())}")
-            print(f"      Full response: {str(data)[:500]}")
-            return [], 0
-    else:
-        print(f"  [!] Неожиданный тип ответа: {type(data)}, value={str(data)[:200]}")
+    if "error" in data and not data.get("ok", True):
+        print(f"  [!] Worker error: {data.get('error', data)}")
         return [], 0
 
-    if raw_lots:
-        print(f"  [dbg] First lot keys: {list(raw_lots[0].keys()) if isinstance(raw_lots[0], dict) else raw_lots[0]}")
+    raw_lots    = data.get("lots", [])
+    total_pages = int(data.get("totalPages", 1) or 1)
+
+    if not isinstance(raw_lots, list):
+        print(f"  [!] lots не список: {type(raw_lots)}")
+        return [], 0
 
     lots = [normalize_lot(r, slug) for r in raw_lots if _lot_id(r)]
-    return lots, int(total_pages)
+    return lots, total_pages
 
 
 # ════════════════════════════════════════════════════════════
