@@ -204,7 +204,32 @@ async function handleApiLots(request) {
   });
 }
 
-// POST /fetch-page {url}
+// GET /debug-api — диагностика: пробует несколько URL и возвращает подробный отчёт
+async function handleDebugApi() {
+  const testUrls = [
+    "https://api.torgi.gov.by/api/lots?category=1&page=0&pagesize=2&onlyNotActive=false&history=false",
+    "https://api.torgi.gov.by/api/lots",
+    "https://torgi.gov.by/api/lots?category=1&page=0&pagesize=2",
+    "https://torgi.gov.by/",
+  ];
+
+  const results = [];
+  for (const url of testUrls) {
+    try {
+      const resp = await fetch(url, { headers: API_HEADERS, cf: { cacheTtl: 0 } });
+      const body = await resp.text();
+      results.push({
+        url,
+        status: resp.status,
+        contentType: resp.headers.get("content-type"),
+        bodyPreview: body.slice(0, 300),
+      });
+    } catch (e) {
+      results.push({ url, error: e.message });
+    }
+  }
+  return jsonResponse({ results });
+}
 // Проксирует fetch() к torgi.gov.by для SSR-страниц (главная, страница лота)
 const ALLOWED_HOSTS = ["torgi.gov.by", "api.torgi.gov.by"];
 
@@ -345,6 +370,7 @@ export default {
       if (method === "GET" && path === "/categories")  return handleGetCategories(env);
       if (method === "GET" && path === "/status")      return handleGetStatus(env);
       if (method === "GET" && path === "/api-lots")    return handleApiLots(request);
+      if (method === "GET" && path === "/debug-api")   return handleDebugApi();
 
       // POST endpoints
       const body = await request.json().catch(() => null);
