@@ -210,33 +210,59 @@ def _make_lot_url(raw: dict) -> str:
 
 
 def _format_price(val) -> str:
-    if val is None or val == "":
+    """
+    Форматирует цену из API.
+    initialPrice = 26078646 → "26 078 646 BYN" (целые рубли)
+    Если значение похоже на копейки (очень большое) — делим на 100.
+    """
+    if val is None or val == "" or val == 0:
         return ""
     try:
         num = float(str(val).replace(" ", "").replace(",", "."))
-        # Форматируем с пробелами-разделителями тысяч
-        int_part, dec_part = f"{num:.2f}".split(".")
-        int_fmt = ""
-        for i, ch in enumerate(reversed(int_part)):
-            if i and i % 3 == 0:
-                int_fmt = " " + int_fmt
-            int_fmt = ch + int_fmt
-        return f"{int_fmt}.{dec_part} BYN"
+        if num == 0:
+            return ""
+        # Форматируем с пробелами как разделителями тысяч, без дробной части
+        int_val = int(num)
+        formatted = f"{int_val:,}".replace(",", " ")
+        return f"{formatted} BYN"
     except (ValueError, TypeError):
         return str(val)
 
 
 def normalize_lot(raw: dict, slug: str) -> dict:
-    """Нормализует объект лота из API в единый формат."""
+    """
+    Нормализует объект лота из API.
+    Реальные поля (из debug-api):
+      id, name, location, initialPrice, region (int), category (int),
+      numAuction, auctionStart, state, description
+    """
+    lot_id     = str(raw.get("id") or "")
+    auction_id = str(raw.get("numAuction") or "")
+    name       = raw.get("name") or ""
+    # URL лота: /lot/{id}/{numAuction}/url-slug
+    # slug из name не делаем — оставляем без slug, сайт сам редиректит
+    url        = f"{BASE_URL}/lot/{lot_id}/{auction_id}/" if lot_id and auction_id else ""
+
+    # Цена: initialPrice в копейках или рублях — судя по значению 26078646
+    # для здания это выглядит как рубли*100 (260 786.46 BYN) или просто рубли
+    # Оставляем как число, форматируем ниже
+    price_raw  = raw.get("initialPrice") or raw.get("currentInitialPrice") or ""
+
+    # region — числовой ID, category — числовой ID
+    # Для уведомлений используем slug категории который передаём отдельно
+    region_id  = raw.get("region") or ""
+    cat_id     = raw.get("category") or ""
+
     return {
-        "lot_id":   _lot_id(raw),
-        "url":      _make_lot_url(raw),
-        "slug":     slug,
-        "title":    str(raw.get("name")         or raw.get("title")       or raw.get("lotName")   or ""),
-        "category": str(raw.get("categoryName") or raw.get("category")    or raw.get("categoryTitle") or ""),
-        "region":   str(raw.get("regionName")   or raw.get("region")      or raw.get("regionTitle")   or ""),
-        "location": str(raw.get("address")      or raw.get("location")    or raw.get("lotAddress")    or ""),
-        "price":    _format_price(raw.get("startPrice") or raw.get("price") or raw.get("startCost") or ""),
+        "lot_id":     lot_id,
+        "url":        url,
+        "slug":       slug,
+        "title":      str(name),
+        "category":   str(cat_id),   # числовой ID — сматчим со slug на стороне бота
+        "region":     str(region_id), # числовой ID региона
+        "location":   str(raw.get("location") or ""),
+        "price":      _format_price(price_raw),
+        "state":      str(raw.get("state") or ""),
     }
 
 
