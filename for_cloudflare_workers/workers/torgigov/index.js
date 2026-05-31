@@ -145,7 +145,6 @@ function formatLotMessage(lot) {
 // ════════════════════════════════════════════════════════════
 
 // GET /api-lots?category=1&page=0&pagesize=50&...
-// Проксирует запрос к api.torgi.gov.by/api/lots
 async function handleApiLots(request) {
   const inUrl  = new URL(request.url);
   const params = new URLSearchParams({
@@ -162,72 +161,55 @@ async function handleApiLots(request) {
     params.set(k, v);
   }
 
-  // Пробуем несколько вариантов базового URL API
-  const candidates = [
-    `https://api.torgi.gov.by/api/lots?${params.toString()}`,
-    `https://api.torgi.gov.by:443/api/lots?${params.toString()}`,
-    `http://api.torgi.gov.by/api/lots?${params.toString()}`,
-  ];
+  const apiUrl = `${TORGI_API}/lots?${params.toString()}`;
 
-  const errors = [];
+  try {
+    const resp = await fetch(apiUrl, { headers: API_HEADERS, cf: { cacheTtl: 0 } });
+    const data = await resp.json();
 
-  for (const apiUrl of candidates) {
-    try {
-      const resp = await fetch(apiUrl, {
-        headers: API_HEADERS,
-        cf: { cacheTtl: 0 },
-      });
-      const body = await resp.text();
-      // Логируем успешный URL для диагностики
-      const result = { _debug_url: apiUrl, _debug_status: resp.status, _raw: body };
-      // Пробуем вернуть сырой ответ API если он валидный JSON
-      try {
-        JSON.parse(body);
-        return new Response(body, {
-          status:  resp.status,
-          headers: { "Content-Type": "application/json; charset=utf-8" },
-        });
-      } catch {
-        return jsonResponse({ ok: false, error: "API returned non-JSON", body: body.slice(0, 200), url: apiUrl });
-      }
-    } catch (e) {
-      errors.push(`${apiUrl} → ${e.message}`);
-    }
+    // Реальная структура ответа: {"status":200,"result":{"lots":[...],"count":N}}
+    const result = data?.result ?? data;
+    const lots   = result?.lots ?? result?.content ?? result?.items ?? [];
+    const count  = result?.count ?? result?.totalElements ?? result?.total ?? lots.length;
+    const pagesize = parseInt(inUrl.searchParams.get("pagesize") || "50");
+    const totalPages = Math.ceil(count / pagesize) || 1;
+
+    return jsonResponse({ lots, count, totalPages });
+  } catch (e) {
+    return jsonResponse({ ok: false, error: e.message }, 502);
   }
-
-  // Все варианты не сработали
-  return jsonResponse({
-    status: 400,
-    errorCode: "",
-    message: "Request failed: " + errors.join(" | "),
-    debug_tried: candidates,
-  });
 }
 
 // GET /debug-api — диагностика: пробует несколько URL и возвращает подробный отчёт
 async function handleDebugApi() {
-  const testUrls = [
-    "https://api.torgi.gov.by/api/lots?category=1&page=0&pagesize=2&onlyNotActive=false&history=false",
-    "https://api.torgi.gov.by/api/lots",
-    "https://torgi.gov.by/api/lots?category=1&page=0&pagesize=2",
-    "https://torgi.gov.by/",
-  ];
-
   const results = [];
-  for (const url of testUrls) {
-    try {
-      const resp = await fetch(url, { headers: API_HEADERS, cf: { cacheTtl: 0 } });
-      const body = await resp.text();
-      results.push({
-        url,
-        status: resp.status,
-        contentType: resp.headers.get("content-type"),
-        bodyPreview: body.slice(0, 300),
-      });
-    } catch (e) {
-      results.push({ url, error: e.message });
-    }
+
+  // Тест 1: один лот category=1 через /api/lots — чтобы увидеть полную структуру
+  try {
+    const url  = `${TORGI_API}/lots?category=1&page=0&pagesize=1&onlyNotActive=false&history=false`;
+    const resp = await fetch(url, { headers: API_HEADERS, cf: { cacheTtl: 0 } });
+    const data = await resp.json();
+    const lot  = data?.result?.lots?.[0] ?? data?.lots?.[0] ?? null;
+    results.push({
+      test: "api_one_lot",
+      status: resp.status,
+      lot_keys: lot ? Object.keys(lot) : null,
+      lot_sample: lot,
+      total_count: data?.result?.count ?? data?.count ?? null,
+      total_pages: data?.result?.totalPages ?? data?.totalPages ?? null,
+    });
+  } catch (e) {
+    results.push({ test: "api_one_lot", error: e.message });
   }
+
+  // Тест 2: доступность torgi.gov.by главной
+  try {
+    const resp = await fetch("https://torgi.gov.by/", { headers: API_HEADERS });
+    results.push({ test: "main_page", status: resp.status });
+  } catch (e) {
+    results.push({ test: "main_page", error: e.message });
+  }
+
   return jsonResponse({ results });
 }
 // Проксирует fetch() к torgi.gov.by для SSR-страниц (главная, страница лота)
@@ -390,4 +372,3 @@ export default {
     }
   },
 };
-
