@@ -173,7 +173,7 @@ async function handleApiLots(request) {
     // Реальная структура: {"status":200,"result":{"lots":[...],"count":N}}
     const result     = data?.result ?? {};
     const lots       = result?.lots ?? [];
-    const count      = result?.count ?? lots.length;
+    const count      = result?.totCnt ?? result?.count ?? lots.length;
     const totalPages = Math.max(1, Math.ceil(count / pagesize));
 
     // Логируем для диагностики
@@ -208,7 +208,7 @@ async function handleDebugApi() {
       rawBody:    text.slice(0, 600),
       resultKeys: parsed?.result ? Object.keys(parsed.result) : null,
       lotsCount:  parsed?.result?.lots?.length ?? parsed?.lots?.length ?? null,
-      totalCount: parsed?.result?.count ?? null,
+      totalCount: parsed?.result?.totCnt ?? parsed?.result?.count ?? null,
     });
   } catch (e) {
     results.push({ test: "api_lots_category1", apiUrl, error: e.message });
