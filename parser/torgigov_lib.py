@@ -1,18 +1,16 @@
 """
 torgigov_lib.py — функции парсера torgi.gov.by
 
-Доступ к данным:
-  api.torgi.gov.by/api заблокирован с GitHub Actions IP.
-  Все API-запросы проксируются через Cloudflare Worker:
+Доступ к данным через Cloudflare Worker (api.torgi.gov.by заблокирован с GitHub IP):
+  GET  {WORKER}/api-lots?category=1&page=0&pagesize=50
+       → Worker → api.torgi.gov.by/api/lots → {"lots":[...],"count":N,"totalPages":N}
+  POST {WORKER}/fetch-page {url}
+       → Worker → torgi.gov.by SSR-страница → {ok, status, html}
 
-    GET  {WORKER}/api-lots?category=1&page=0&pagesize=50
-         → Worker вызывает api.torgi.gov.by/api/lots → возвращает JSON
-    POST {WORKER}/fetch-page {url: "https://torgi.gov.by/lot/..."}
-         → Worker делает fetch() → возвращает {ok, status, html}
-
-Список лотов: JSON API (не HTML-парсинг)
-Данные лота:  JSON API (поля name, regionName, address, startPrice, ...)
-Категории:    из меню главной страницы (SSR) + hardcoded fallback
+Структура ответа API:
+  {"status":200,"result":{"lots":[{id,name,location,numAuction,initialPrice,region,...}],
+                          "totCnt":N,"summary":...}}
+  Worker разворачивает в: {"lots":[...],"count":N,"totalPages":N}
 """
 
 import re
@@ -24,44 +22,24 @@ from urllib.parse import unquote
 
 import config as cfg
 
-BASE_URL    = "https://torgi.gov.by"
-_SESSION    = requests.Session()
-
-# Шаблон URL лота: /lot/{lotId}/{auctionId}/
+BASE_URL = "https://torgi.gov.by"
 _LOT_URL_RE = re.compile(r"/lot/(\d+)/(\d+)/")
+
+_SESSION = requests.Session()
 
 
 # ════════════════════════════════════════════════════════════
 # HTTP К WORKER
 # ════════════════════════════════════════════════════════════
 
-def _worker_get(path: str, params: dict = None) -> dict | list | None:
-    """GET {WORKER_URL}/{path}?params — возвращает parsed JSON или None."""
-    url = f"{cfg.TORGIGOV_WORKER_URL}/{path.lstrip('/')}"
-    for attempt in range(1, cfg.REQUEST_RETRIES + 1):
-        try:
-            r = _SESSION.get(
-                url, params=params,
-                headers={"X-API-Key": cfg.PARSER_SECRET},
-                timeout=cfg.REQUEST_TIMEOUT,
-            )
-            r.raise_for_status()
-            return r.json()
-        except requests.RequestException as e:
-            print(f"  [!] Worker GET {path} ({attempt}/{cfg.REQUEST_RETRIES}): {e}")
-            if attempt < cfg.REQUEST_RETRIES:
-                time.sleep(cfg.RETRY_BASE_DELAY * attempt)
-    return None
-
-
 def _worker_post(path: str, body: dict) -> dict | None:
-    """POST {WORKER_URL}/{path} body — возвращает parsed JSON или None."""
     url = f"{cfg.TORGIGOV_WORKER_URL}/{path.lstrip('/')}"
     for attempt in range(1, cfg.REQUEST_RETRIES + 1):
         try:
             r = _SESSION.post(
                 url, json=body,
-                headers={"X-API-Key": cfg.PARSER_SECRET},
+                headers={"X-API-Key": cfg.PARSER_SECRET,
+                         "Content-Type": "application/json"},
                 timeout=cfg.REQUEST_TIMEOUT,
             )
             r.raise_for_status()
@@ -118,14 +96,14 @@ _FALLBACK_CATEGORIES = [
 ]
 
 _TOP_IDS = set(range(1, 14)) | {164, 167}
-_CAT_PAT = re.compile(r"/catalog/([a-z0-9-]+)/1/%3Fcategory%3D(\d+)")
+# Ссылки в HTML хранятся в URL-encoded виде: /catalog/{slug}/1/%3Fcategory%3D{id}
+_CAT_PAT_ENCODED = re.compile(r"/catalog/([a-z0-9-]+)/1/%3Fcategory%3D(\d+)")
+_CAT_PAT_PLAIN   = re.compile(r"/catalog/([a-z0-9-]+)/1/\?category=(\d+)")
 
 
 def parse_top_categories() -> list[dict]:
     """
-    Парсит категории с главной страницы (SSR nav-меню через Worker).
-    Ищет ссылки вида /catalog/{slug}/1/%3Fcategory%3D{id} — именно
-    в таком URL-encoded виде они присутствуют в HTML.
+    Парсит категории с главной страницы через Worker /fetch-page.
     При неудаче возвращает _FALLBACK_CATEGORIES.
     """
     print("[→] Парсю категории torgi.gov.by…")
@@ -146,39 +124,20 @@ def parse_top_categories() -> list[dict]:
             seen.add(key)
             categories.append({"slug": slug, "label": label, "category_id": cat_id})
 
-    # Стратегия 1: ищем ссылки с %3F (encoded ?) в href — именно так они в HTML
     for a in soup.find_all("a", href=True):
-        href = a["href"]  # НЕ unquote — ссылки хранятся в encoded виде
-        m = _CAT_PAT.search(href)
+        href = a["href"]
+        # Ищем сначала encoded (%3F), потом plain (?)
+        m = _CAT_PAT_ENCODED.search(href) or _CAT_PAT_PLAIN.search(unquote(href))
         if not m:
             continue
         cat_id = int(m.group(2))
         if cat_id not in _TOP_IDS:
             continue
-        # Пропускаем подкатегории
         if a.find_parent("li", class_="main_category_mnu_sub_item"):
             continue
         if a.find_parent("ul", class_="main_category_mnu_sub"):
             continue
         add(m.group(1), cat_id, _clean(a.get_text()))
-
-    print(f"  [i] Стратегия 1 (%3F encoded): {len(categories)} категорий")
-
-    # Стратегия 2: unquote + обычный ?category= (на случай если сервер вернёт иначе)
-    if not categories:
-        pat2 = re.compile(r"/catalog/([a-z0-9-]+)/1/\?category=(\d+)")
-        for a in soup.find_all("a", href=True):
-            href = unquote(a["href"])
-            m = pat2.search(href)
-            if not m:
-                continue
-            cat_id = int(m.group(2))
-            if cat_id not in _TOP_IDS:
-                continue
-            if a.find_parent("li", class_="main_category_mnu_sub_item"):
-                continue
-            add(m.group(1), cat_id, _clean(a.get_text()))
-        print(f"  [i] Стратегия 2 (unquoted): {len(categories)} категорий")
 
     if not categories:
         print("[!] Категории не найдены в HTML — использую резервные")
@@ -195,35 +154,17 @@ def parse_top_categories() -> list[dict]:
 # ════════════════════════════════════════════════════════════
 
 def _lot_id(raw: dict) -> str:
-    """Извлекает ID лота из JSON-объекта API."""
-    return str(raw.get("id") or raw.get("lotId") or raw.get("lot_id") or "")
-
-
-def _make_lot_url(raw: dict) -> str:
-    lot_id     = raw.get("id")     or raw.get("lotId")     or ""
-    auction_id = raw.get("auctionId") or raw.get("auction_id") or raw.get("saleId") or ""
-    url_slug   = raw.get("urlName") or raw.get("slug") or raw.get("nameUrl") or ""
-    if url_slug:
-        return f"{BASE_URL}/lot/{lot_id}/{auction_id}/{url_slug}"
-    return f"{BASE_URL}/lot/{lot_id}/{auction_id}/"
+    return str(raw.get("id") or "")
 
 
 def _format_price(val) -> str:
-    """
-    Форматирует цену из API.
-    initialPrice = 26078646 → "26 078 646 BYN" (целые рубли)
-    Если значение похоже на копейки (очень большое) — делим на 100.
-    """
     if val is None or val == "" or val == 0:
         return ""
     try:
-        num = float(str(val).replace(" ", "").replace(",", "."))
+        num = int(float(str(val).replace(" ", "").replace(",", ".")))
         if num == 0:
             return ""
-        # Форматируем с пробелами как разделителями тысяч, без дробной части
-        int_val = int(num)
-        formatted = f"{int_val:,}".replace(",", " ")
-        return f"{formatted} BYN"
+        return f"{num:,}".replace(",", " ") + " BYN"
     except (ValueError, TypeError):
         return str(val)
 
@@ -231,77 +172,57 @@ def _format_price(val) -> str:
 def normalize_lot(raw: dict, slug: str) -> dict:
     """
     Нормализует объект лота из API.
-    Реальные поля (из debug-api):
-      id, name, location, initialPrice, region (int), category (int),
-      numAuction, auctionStart, state, description
+    Поля из реального ответа: id, name, location, numAuction,
+    initialPrice, region (int ID), category (int ID).
     """
     lot_id     = str(raw.get("id") or "")
     auction_id = str(raw.get("numAuction") or "")
-    name       = raw.get("name") or ""
-    # URL лота: /lot/{id}/{numAuction}/url-slug
-    # slug из name не делаем — оставляем без slug, сайт сам редиректит
     url        = f"{BASE_URL}/lot/{lot_id}/{auction_id}/" if lot_id and auction_id else ""
 
-    # Цена: initialPrice в копейках или рублях — судя по значению 26078646
-    # для здания это выглядит как рубли*100 (260 786.46 BYN) или просто рубли
-    # Оставляем как число, форматируем ниже
-    price_raw  = raw.get("initialPrice") or raw.get("currentInitialPrice") or ""
-
-    # region — числовой ID, category — числовой ID
-    # Для уведомлений используем slug категории который передаём отдельно
-    region_id  = raw.get("region") or ""
-    cat_id     = raw.get("category") or ""
-
     return {
-        "lot_id":     lot_id,
-        "url":        url,
-        "slug":       slug,
-        "title":      str(name),
-        "category":   str(cat_id),   # числовой ID — сматчим со slug на стороне бота
-        "region":     str(region_id), # числовой ID региона
-        "location":   str(raw.get("location") or ""),
-        "price":      _format_price(price_raw),
-        "state":      str(raw.get("state") or ""),
+        "lot_id":   lot_id,
+        "url":      url,
+        "slug":     slug,
+        "title":    str(raw.get("name") or ""),
+        "category": str(raw.get("category") or ""),   # числовой ID
+        "region":   str(raw.get("region") or ""),     # числовой ID
+        "location": str(raw.get("location") or ""),
+        "price":    _format_price(raw.get("initialPrice") or raw.get("currentInitialPrice")),
+        "state":    str(raw.get("state") or ""),
     }
 
 
-def fetch_lots_page(category_id: int, slug: str, page: int = 0, pagesize: int = 50) -> tuple[list[dict], int]:
+def fetch_lots_page(
+    category_id: int, slug: str,
+    page: int = 0, pagesize: int = 50,
+) -> tuple[list[dict], int]:
     """
-    Запрашивает одну страницу лотов через Worker /api-lots.
-    Worker возвращает: {"lots": [...], "count": N, "totalPages": N}
+    Запрашивает страницу лотов через Worker /api-lots.
+    Возвращает (лоты, totalPages).
     """
-    url    = f"{cfg.TORGIGOV_WORKER_URL}/api-lots".replace("//api-lots", "/api-lots")
-    params = {"category": category_id, "page": page, "pagesize": pagesize}
-    print(f"  [dbg] Запрос: GET {url} params={params}")
+    worker_url = f"{cfg.TORGIGOV_WORKER_URL}/api-lots"
+    params     = {"category": category_id, "page": page, "pagesize": pagesize}
 
     for attempt in range(1, cfg.REQUEST_RETRIES + 1):
         try:
             r = requests.get(
-                url, params=params,
+                worker_url, params=params,
                 headers={"X-API-Key": cfg.PARSER_SECRET},
                 timeout=cfg.REQUEST_TIMEOUT,
             )
-            body = r.text
-            print(f"  [dbg] /api-lots HTTP {r.status_code} len={len(body)}")
-            print(f"  [dbg] body={body[:300]}")
             if r.status_code >= 400:
-                print(f"  [!] api-lots HTTP {r.status_code}: {body[:300]}")
+                print(f"  [!] /api-lots HTTP {r.status_code}: {r.text[:200]}")
                 if attempt < cfg.REQUEST_RETRIES:
                     time.sleep(cfg.RETRY_BASE_DELAY * attempt)
                     continue
                 return [], 0
             data = r.json()
-            # Показываем точный URL который Worker отправил в API
-            debug_url = data.get("_debug_apiUrl", "")
-            if debug_url:
-                print(f"  [dbg] Worker→API: {debug_url}")
-                print(f"  [dbg] Worker→API status: {data.get('_debug_apiStatus')}, count={data.get('count')}")
             break
         except requests.exceptions.JSONDecodeError as e:
-            print(f"  [!] JSON decode error: {e}, body={r.text[:200]}")
+            print(f"  [!] JSON error: {e}, body={r.text[:100]}")
             return [], 0
         except requests.RequestException as e:
-            print(f"  [!] api-lots attempt {attempt}/{cfg.REQUEST_RETRIES}: {e}")
+            print(f"  [!] /api-lots attempt {attempt}/{cfg.REQUEST_RETRIES}: {e}")
             if attempt < cfg.REQUEST_RETRIES:
                 time.sleep(cfg.RETRY_BASE_DELAY * attempt)
             else:
@@ -310,18 +231,15 @@ def fetch_lots_page(category_id: int, slug: str, page: int = 0, pagesize: int = 
         return [], 0
 
     if not isinstance(data, dict):
-        print(f"  [!] Неожиданный тип ответа: {type(data)}")
         return [], 0
-
     if "error" in data and not data.get("ok", True):
-        print(f"  [!] Worker error: {data.get('error', data)}")
+        print(f"  [!] Worker error: {data.get('error')}")
         return [], 0
 
     raw_lots    = data.get("lots", [])
     total_pages = int(data.get("totalPages", 1) or 1)
 
     if not isinstance(raw_lots, list):
-        print(f"  [!] lots не список: {type(raw_lots)}")
         return [], 0
 
     lots = [normalize_lot(r, slug) for r in raw_lots if _lot_id(r)]
@@ -330,7 +248,6 @@ def fetch_lots_page(category_id: int, slug: str, page: int = 0, pagesize: int = 
 
 # ════════════════════════════════════════════════════════════
 # АЛГОРИТМ НОВЫХ ЛОТОВ
-# ID лотов монотонно возрастают — сравниваем множествами.
 # ════════════════════════════════════════════════════════════
 
 def find_new_lots_by_id(
@@ -338,10 +255,8 @@ def find_new_lots_by_id(
     known_ids: set[str],
 ) -> list[dict]:
     """
-    Возвращает лоты чьи lot_id отсутствуют в known_ids.
-    Лоты уже отсортированы по убыванию новизны (sort1=approvetime).
-    Останавливаемся при первом известном ID — это признак что
-    все последующие тоже известны.
+    Возвращает лоты с неизвестными ID.
+    Останавливается при первом известном — API сортирует по убыванию новизны.
     """
     new_lots = []
     for lot in fetched_lots:
@@ -349,27 +264,20 @@ def find_new_lots_by_id(
         if not lid:
             continue
         if lid in known_ids:
-            # Встретили известный — дальше только старые
             break
         new_lots.append(lot)
     return new_lots
 
 
 # ════════════════════════════════════════════════════════════
-# ДАННЫЕ ЛОТА (страница лота — SSR)
-# Используется только если API не вернул достаточно полей.
+# СТРАНИЦА ЛОТА (SSR fallback — если нужны доп. поля)
 # ════════════════════════════════════════════════════════════
 
-def _extract_lot_from_page(soup: BeautifulSoup, stored_url: str) -> dict:
-    """Парсит поля лота из SSR-страницы (fallback)."""
-    m = _LOT_URL_RE.search(stored_url)
+def _extract_lot_from_page(soup: BeautifulSoup, url: str) -> dict:
+    m = _LOT_URL_RE.search(url)
     lot_id = m.group(1) if m else ""
-
-    result = {
-        "lot_id": lot_id, "url": stored_url,
-        "title": "", "category": "", "region": "", "location": "", "price": "",
-    }
-
+    result = {"lot_id": lot_id, "url": url,
+               "title": "", "category": "", "region": "", "location": "", "price": ""}
     table1 = soup.find("table", class_="detail_lot_part1")
     if table1:
         for row in table1.find_all("tr"):
@@ -378,11 +286,10 @@ def _extract_lot_from_page(soup: BeautifulSoup, stored_url: str) -> dict:
                 continue
             key = _clean(cells[0].get_text()).lower().rstrip(":")
             val = _clean(cells[1].get_text())
-            if "наименование" in key:   result["title"]    = val
-            elif "категория" in key:    result["category"] = val
-            elif key == "регион":       result["region"]   = val
+            if "наименование" in key:    result["title"]    = val
+            elif "категория" in key:     result["category"] = val
+            elif key == "регион":        result["region"]   = val
             elif "местонахожден" in key: result["location"] = val
-
     table2 = soup.find("table", class_="detail_lot_part2")
     if table2:
         for row in table2.find_all("tr"):
@@ -394,8 +301,7 @@ def _extract_lot_from_page(soup: BeautifulSoup, stored_url: str) -> dict:
                 m2  = re.search(r"([\d][\d\s]*[.,]\d{2})\s*Руб", raw, re.I)
                 if m2:
                     result["price"] = _format_price(
-                        m2.group(1).replace(" ", "").replace(",", ".")
-                    )
+                        m2.group(1).replace(" ", "").replace(",", "."))
                 else:
                     result["price"] = raw
     return result
