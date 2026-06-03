@@ -40,42 +40,17 @@ def save_categories(categories: list[dict]) -> None:
 
 
 def snapshot_category(cat: dict) -> list[str]:
-    """Собирает все lot_id категории через API."""
+    """Забирает 10 последних лотов категории — достаточно для дневного сравнения."""
     slug   = cat["slug"]
     cat_id = cat["category_id"]
     label  = cat["label"]
     print(f"\n  [+] Слепок: {label} (id={cat_id})")
 
-    all_ids: list[str] = []
-    pagesize = cfg.SNAPSHOT_PAGE_SIZE
-    page     = 0
+    lots, _ = lib.fetch_lots_page(cat_id, slug, page=0, pagesize=10)
 
-    while True:
-        print(f"      → стр. {page}: category={cat_id} pagesize={pagesize}")
-        lots, total_pages = lib.fetch_lots_page(cat_id, slug, page=page, pagesize=pagesize)
-
-        if not lots:
-            if page == 0:
-                print(f"      [!] Страница 0 пуста — возможно категория пустая или API недоступен")
-            break
-
-        for lot in lots:
-            if lot["lot_id"] and lot["lot_id"] not in all_ids:
-                all_ids.append(lot["lot_id"])
-
-        print(f"         лотов: {len(lots)}, всего страниц: {total_pages}, собрано ID: {len(all_ids)}")
-
-        if page + 1 >= total_pages:
-            break
-        if len(all_ids) >= cfg.SNAPSHOT_LOTS_LIMIT:
-            print(f"      [i] Достигнут лимит {cfg.SNAPSHOT_LOTS_LIMIT}, останавливаю")
-            break
-
-        page += 1
-        lib.pause(cfg.DELAY_BETWEEN_LIST_PAGES)
-
-    print(f"      Итого: {len(all_ids)} лотов")
-    return all_ids
+    ids = [l["lot_id"] for l in lots if l["lot_id"]]
+    print(f"      Лотов: {len(ids)}")
+    return ids
 
 
 def main() -> None:
@@ -120,3 +95,4 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"\n[✗] КРИТИЧЕСКАЯ ОШИБКА: {e}")
         sys.exit(1)
+      
