@@ -270,8 +270,9 @@ def fetch_lots_page(category_id: int, slug: str, page: int = 0, pagesize: int = 
     Запрашивает одну страницу лотов через Worker /api-lots.
     Worker возвращает: {"lots": [...], "count": N, "totalPages": N}
     """
-    url    = f"{cfg.TORGIGOV_WORKER_URL}/api-lots"
+    url    = f"{cfg.TORGIGOV_WORKER_URL}/api-lots".replace("//api-lots", "/api-lots")
     params = {"category": category_id, "page": page, "pagesize": pagesize}
+    print(f"  [dbg] Запрос: GET {url} params={params}")
 
     for attempt in range(1, cfg.REQUEST_RETRIES + 1):
         try:
@@ -280,14 +281,21 @@ def fetch_lots_page(category_id: int, slug: str, page: int = 0, pagesize: int = 
                 headers={"X-API-Key": cfg.PARSER_SECRET},
                 timeout=cfg.REQUEST_TIMEOUT,
             )
-            print(f"  [dbg] /api-lots HTTP {r.status_code} len={len(r.text)} body={r.text[:120]}")
+            body = r.text
+            print(f"  [dbg] /api-lots HTTP {r.status_code} len={len(body)}")
+            print(f"  [dbg] body={body[:300]}")
             if r.status_code >= 400:
-                print(f"  [!] api-lots HTTP {r.status_code}: {r.text[:300]}")
+                print(f"  [!] api-lots HTTP {r.status_code}: {body[:300]}")
                 if attempt < cfg.REQUEST_RETRIES:
                     time.sleep(cfg.RETRY_BASE_DELAY * attempt)
                     continue
                 return [], 0
             data = r.json()
+            # Показываем точный URL который Worker отправил в API
+            debug_url = data.get("_debug_apiUrl", "")
+            if debug_url:
+                print(f"  [dbg] Worker→API: {debug_url}")
+                print(f"  [dbg] Worker→API status: {data.get('_debug_apiStatus')}, count={data.get('count')}")
             break
         except requests.exceptions.JSONDecodeError as e:
             print(f"  [!] JSON decode error: {e}, body={r.text[:200]}")
