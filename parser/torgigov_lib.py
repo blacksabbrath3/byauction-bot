@@ -200,7 +200,8 @@ def fetch_lots_page(
     Запрашивает страницу лотов через Worker /api-lots.
     Возвращает (лоты, totalPages).
     """
-    worker_url = f"{cfg.TORGIGOV_WORKER_URL}/api-lots"
+    worker_url = (f"{cfg.TORGIGOV_WORKER_URL}/api-lots"
+                  .replace("//api-lots", "/api-lots"))
     params     = {"category": category_id, "page": page, "pagesize": pagesize}
 
     for attempt in range(1, cfg.REQUEST_RETRIES + 1):
@@ -305,3 +306,4 @@ def _extract_lot_from_page(soup: BeautifulSoup, url: str) -> dict:
                 else:
                     result["price"] = raw
     return result
+  
