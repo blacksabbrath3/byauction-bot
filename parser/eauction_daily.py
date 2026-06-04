@@ -29,7 +29,41 @@ PARSER_SECRET = cfg.PARSER_SECRET
 # ПРОВЕРКА НЕОБХОДИМОСТИ ПОЛНОГО СБРОСА
 # ════════════════════════════════════════════════════════════
 
-def should_do_full_reset() -> bool:
+def was_snapshot_just_run() -> bool:
+    """
+    Возвращает True если снапшот был запущен менее SNAPSHOT_GRACE_MINUTES минут назад.
+    В этом случае daily пропускает парсинг — нечего искать.
+    """
+    grace = getattr(cfg, "SNAPSHOT_GRACE_MINUTES", 60)
+    try:
+        r = lib.SESSION.get(
+            f"{WORKER_URL}/status",
+            headers={"X-API-Key": PARSER_SECRET},
+            timeout=20,
+        )
+        r.raise_for_status()
+        snap_ts = r.json().get("snapshot_ts")
+        if not snap_ts:
+            return False
+        # snapshot_ts может быть в формате locale ("31.05.2026, 10:00:00")
+        # или ISO — пробуем оба
+        snap_dt = None
+        for fmt in ("%d.%m.%Y, %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M:%SZ"):
+            try:
+                snap_dt = datetime.strptime(snap_ts, fmt).replace(tzinfo=timezone.utc)
+                break
+            except ValueError:
+                continue
+        if snap_dt is None:
+            return False
+        minutes_ago = (datetime.now(timezone.utc) - snap_dt).total_seconds() / 60
+        if minutes_ago < grace:
+            print(f"[i] Снапшот был {minutes_ago:.0f} мин назад (< {grace} мин) — пропускаю парсинг.")
+            return True
+        return False
+    except Exception as e:
+        print(f"[!] was_snapshot_just_run: {e}")
+        return False
     try:
         r = lib.SESSION.get(
             f"{WORKER_URL}/status",
@@ -285,6 +319,13 @@ def main() -> None:
     # Шаг 0: Рандомная задержка (пропускается при ручном запуске)
     random_delay()
 
+    # Шаг 0.5: Если снапшот был запущен недавно — нечего парсить
+    if was_snapshot_just_run():
+        print("\n[i] Снапшот только что завершён — парсинг пропущен.")
+        print("    (Чтобы принудительно запустить, подожди SNAPSHOT_GRACE_MINUTES минут)")
+        print("=" * 60)
+        return
+
     # Шаг 1: Загружаем known_lots
     print("\n[1] Загружаю known_lots…")
     known_all = fetch_known_lots()
@@ -337,3 +378,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+      
