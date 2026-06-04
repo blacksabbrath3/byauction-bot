@@ -103,49 +103,14 @@ _CAT_PAT_PLAIN   = re.compile(r"/catalog/([a-z0-9-]+)/1/\?category=(\d+)")
 
 def parse_top_categories() -> list[dict]:
     """
-    Парсит категории с главной страницы через Worker /fetch-page.
-    При неудаче возвращает _FALLBACK_CATEGORIES.
+    Возвращает список top-level категорий.
+    Главная страница torgi.gov.by — Angular SPA, меню в SSR не рендерится.
+    Категории стабильны (IDs 1-11, 167, 164 не меняются), поэтому
+    используем hardcoded список. Раз в месяц snapshot сохраняет его в KV.
     """
-    print("[→] Парсю категории torgi.gov.by…")
-    soup = get_soup(BASE_URL + "/")
-    if soup is None:
-        print("[!] Главная недоступна — использую резервные категории")
-        return list(_FALLBACK_CATEGORIES)
-
-    seen: set[tuple] = set()
-    categories: list[dict] = []
-
-    def add(slug: str, cat_id: int, label: str) -> None:
-        label = re.sub(r"\s*\d+\s*$", "", label).strip()
-        if not label or len(label) > 120:
-            return
-        key = (slug, cat_id)
-        if key not in seen:
-            seen.add(key)
-            categories.append({"slug": slug, "label": label, "category_id": cat_id})
-
-    for a in soup.find_all("a", href=True):
-        href = a["href"]
-        # Ищем сначала encoded (%3F), потом plain (?)
-        m = _CAT_PAT_ENCODED.search(href) or _CAT_PAT_PLAIN.search(unquote(href))
-        if not m:
-            continue
-        cat_id = int(m.group(2))
-        if cat_id not in _TOP_IDS:
-            continue
-        if a.find_parent("li", class_="main_category_mnu_sub_item"):
-            continue
-        if a.find_parent("ul", class_="main_category_mnu_sub"):
-            continue
-        add(m.group(1), cat_id, _clean(a.get_text()))
-
-    if not categories:
-        print("[!] Категории не найдены в HTML — использую резервные")
-        return list(_FALLBACK_CATEGORIES)
-
-    print(f"[✓] Категорий top-level: {len(categories)}")
-    for c in categories:
-        print(f"    {c['label']:50s} → {c['slug']} (id={c['category_id']})")
+    print("[→] Использую список категорий torgi.gov.by…")
+    categories = list(_FALLBACK_CATEGORIES)
+    print(f"[✓] Категорий: {len(categories)}")
     return categories
 
 
