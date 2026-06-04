@@ -27,7 +27,7 @@ PARSER_SECRET = os.environ.get("PARSER_SECRET", "")
 # чтобы реальный старт был равномерно распределён между 02:00 и 06:00 UTC.
 # При ручном запуске (workflow_dispatch) задержка пропускается автоматически —
 # переменная окружения SKIP_RANDOM_DELAY=true выставляется в yml.
-RANDOM_DELAY_MAX_SECONDS = 14400  # 4 часа
+RANDOM_DELAY_MAX_SECONDS = 144  # 4 часа
 
 # Время отправки уведомлений подписчикам (UTC).
 # "06:00" UTC = 09:00 Минск (UTC+3).
