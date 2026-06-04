@@ -569,7 +569,387 @@ async function handleCallback(token, update, env) {
     }
   }
 
-  //    group.forEach(w => {
+  // ── torgigov: выбор категорий ────────────────────────────────
+  if (data.startsWith("sub_tgc:") && dialog.step === "torgigov_categories") {
+    const slug = data.slice(8);
+    const tgCats = dialog.data.torgigovCategories || [];
+    let selected = dialog.data.selectedTorgigovCategories || [];
+
+    if (slug === "all") {
+      selected = [];
+    } else if (slug === "done") {
+      dialog.data.categories = selected;
+      dialog.step = "region";
+      await saveDialog(env, userId, dialog);
+      return editMessage(token, chatId, msgId,
+        `📋 <b>Новая подписка — torgi.gov.by</b>\n\nШаг 2 из 3 — Регион:`,
+        { reply_markup: inlineRegion() });
+    } else {
+      if (selected.includes(slug)) {
+        selected = selected.filter(s => s !== slug);
+      } else {
+        selected = [...selected, slug];
+      }
+    }
+
+    dialog.data.selectedTorgigovCategories = selected;
+    await saveDialog(env, userId, dialog);
+    return editMessage(token, chatId, msgId,
+      `📋 <b>Новая подписка — torgi.gov.by</b>\n\nШаг 1 из 3 — Выберите категории (можно несколько):`,
+      { reply_markup: inlineTorgigovCategories(tgCats, selected) });
+  }
+
+  // Шаг 1: тип e-auction
+  if (data.startsWith("sub_t:") && dialog.step === "type") {
+    const type = data.slice(6);
+    dialog.data.type = type;
+
+    if (type === "auction") {
+      const categories = await getCategories(env);
+      dialog.data.selectedCategories = [];
+      dialog.step = "categories";
+      await saveDialog(env, userId, dialog);
+      return editMessage(token, chatId, msgId,
+        categoryStepText([], categories),
+        { reply_markup: inlineCategories(categories, []) });
+    } else {
+      dialog.data.categories = [];
+      dialog.step = "region";
+      await saveDialog(env, userId, dialog);
+      return editMessage(token, chatId, msgId,
+        `📋 <b>Новая подписка — e-auction.by</b>\n\nШаг 2 из 3 — Выберите регион:`,
+        { reply_markup: inlineRegion() });
+    }
+  }
+
+  // Шаг 2: категории
+  if (data.startsWith("sub_c:") && dialog.step === "categories") {
+    const categories = await getCategories(env);
+    const slug = data.slice(6);
+
+    if (slug === "all") {
+      dialog.data.selectedCategories = [];
+      dialog.data.allCategories = true;
+      await saveDialog(env, userId, dialog);
+      return editMessage(token, chatId, msgId,
+        categoryStepText([], categories) + "\n\n☑️ <b>Выбраны все категории.</b> Нажмите «✔️ Готово».",
+        { reply_markup: inlineCategories(categories, []) });
+    }
+
+    if (slug === "done") {
+      const sel = dialog.data.selectedCategories || [];
+      if (!dialog.data.allCategories && sel.length === 0) {
+        await answerCallback(token, cb.id, "Выберите хотя бы одну категорию или нажмите «☑️ Все категории»");
+        return;
+      }
+      dialog.data.categories = dialog.data.allCategories ? [] : sel;
+      delete dialog.data.selectedCategories;
+      delete dialog.data.allCategories;
+      dialog.step = "region";
+      await saveDialog(env, userId, dialog);
+      return editMessage(token, chatId, msgId,
+        `📋 <b>Новая подписка — e-auction.by</b>\n\nШаг 2 из 3 — Выберите регион:`,
+        { reply_markup: inlineRegion() });
+    }
+
+    const sel = dialog.data.selectedCategories || [];
+    const idx = sel.indexOf(slug);
+    if (idx === -1) sel.push(slug); else sel.splice(idx, 1);
+    dialog.data.selectedCategories = sel;
+    dialog.data.allCategories = false;
+    await saveDialog(env, userId, dialog);
+    return editMessage(token, chatId, msgId,
+      categoryStepText(sel, categories),
+      { reply_markup: inlineCategories(categories, sel) });
+  }
+
+  // Регион
+  if (data === "sub_reg:all") {
+    dialog.data.region = "all";
+    dialog.step = "keywords_input";
+    dialog.data.keywordGroups = [];
+    await saveDialog(env, userId, dialog);
+    return editMessage(token, chatId, msgId,
+      keywordsPromptText("eauction") + currentGroupsSummary(dialog.data.keywordGroups),
+      { reply_markup: inlineKeywordsSkip() });
+  }
+  if (data === "sub_reg:oblast") {
+    dialog.step = "region_oblast";
+    await saveDialog(env, userId, dialog);
+    return editMessage(token, chatId, msgId,
+      `📋 <b>Новая подписка — e-auction.by</b>\n\nВыберите область:`,
+      { reply_markup: inlineOblasts() });
+  }
+  if (data.startsWith("sub_obl:") && dialog.step === "region_oblast") {
+    dialog.data.region = [data.slice(8)];
+    dialog.step = "keywords_input";
+    dialog.data.keywordGroups = [];
+    await saveDialog(env, userId, dialog);
+    return editMessage(token, chatId, msgId,
+      keywordsPromptText("eauction") + currentGroupsSummary(dialog.data.keywordGroups),
+      { reply_markup: inlineKeywordsSkip() });
+  }
+
+  if (data === "sub_reg:words") {
+    dialog.data.region = "keywords";
+    dialog.step = "keywords_input";
+    dialog.data.keywordGroups = [];
+    await saveDialog(env, userId, dialog);
+    return editMessage(token, chatId, msgId,
+      keywordsPromptText("eauction") + currentGroupsSummary(dialog.data.keywordGroups),
+      { reply_markup: inlineKeywordsSkip() });
+  }
+
+  // Ключевые слова: пропустить
+  if (data === "sub_kw:skip") {
+    dialog.data.keywords = [];
+    if (dialog.data.source === "rechitsa") {
+      dialog.data.max_price = 0;
+      const categories = await getCategories(env);
+      return finishSubscription(token, chatId, userId, msgId, dialog, env, categories);
+    }
+    if (dialog.data.source === "torgigov") {
+      dialog.data.max_price = 0;
+      const categories = await getTorgigovCategories(env);
+      return finishSubscription(token, chatId, userId, msgId, dialog, env, categories);
+    }
+    dialog.step = "max_price";
+    await saveDialog(env, userId, dialog);
+    return editMessage(token, chatId, msgId,
+      maxPricePromptText(), { reply_markup: inlineMaxPriceSkip() });
+  }
+
+  // Максимальная цена: пропустить
+  if (data === "sub_mp:skip") {
+    dialog.data.max_price = 0;
+    const categories = await getCategories(env);
+    return finishSubscription(token, chatId, userId, msgId, dialog, env, categories);
+  }
+
+  // Обработка выбора типа слова
+  if (data.startsWith("sub_wt|")) {
+    const parts = data.split("|");
+    const groupIdx = parseInt(parts[1]);
+    const tokenIdx = parseInt(parts[2]);
+    const type = parts[3];
+    
+    if (!dialog.data.keywordGroups || !dialog.data.keywordGroups[groupIdx]) {
+      await answerCallback(token, cb.id, "Ошибка: группа не найдена");
+      return;
+    }
+    
+    if (!dialog.data.currentFlatTokens || !dialog.data.currentFlatTokens[tokenIdx]) {
+      await answerCallback(token, cb.id, "Ошибка: токен не найден");
+      return;
+    }
+    
+    const flatToken = dialog.data.currentFlatTokens[tokenIdx];
+    const group = dialog.data.keywordGroups[groupIdx];
+
+    // Ищем элемент в группе по уникальному ключу токена
+    const groupItem = group.find(w => w.key === flatToken.key);
+
+    if (!groupItem) {
+      await answerCallback(token, cb.id, "Ошибка: слово не найдено в группе");
+      return;
+    }
+
+    groupItem.type = type;
+    if (type !== "custom") {
+      delete groupItem.pattern;
+    }
+
+    await saveDialog(env, userId, dialog);
+
+    // Обновляем wordTypes по ключу токена
+    const wordTypes = {};
+    group.forEach(w => {
+      wordTypes[w.key] = w.type || "partial";
+    });
+    
+    return editMessage(token, chatId, msgId,
+      wordTypesHelpText() + "\n\n" + groupSummaryText(group),
+      { reply_markup: inlineWordTypeChoice(
+        dialog.data.currentFlatTokens,
+        wordTypes,
+        groupIdx
+      )});
+  }
+
+  // Готово с типами слов
+  if (data.startsWith("sub_wt_done|")) {
+    const gIdx = parseInt(data.split("|")[1]);
+    
+    if (!dialog.data.keywordGroups || !dialog.data.keywordGroups[gIdx]) {
+      await answerCallback(token, cb.id, "Ошибка: группа не найдена");
+      return;
+    }
+    
+    const group = dialog.data.keywordGroups[gIdx];
+    for (const w of group) {
+      if (!w.type) w.type = "partial";
+    }
+    
+    // Очищаем временные данные
+    delete dialog.data.currentFlatTokens;
+    delete dialog.data.currentParsedParts;
+    
+    await saveDialog(env, userId, dialog);
+    
+    return editMessage(token, chatId, msgId,
+      `📝 <b>Группа ${gIdx + 1} сохранена</b>\n\n` +
+      groupSummaryText(group) +
+      currentGroupsSummary(dialog.data.keywordGroups),
+      { reply_markup: inlineAddMoreGroups(dialog.data.keywordGroups.length) });
+  }
+
+  // Добавить ещё группу
+  if (data === "sub_kg:add") {
+    if (dialog.data.keywordGroups.length >= MAX_KEYWORD_GROUPS) {
+      await answerCallback(token, cb.id, `Максимум ${MAX_KEYWORD_GROUPS} групп`);
+      return;
+    }
+    dialog.step = "keywords_input";
+    await saveDialog(env, userId, dialog);
+    return editMessage(token, chatId, msgId,
+      `📝 Введите слова для группы ${dialog.data.keywordGroups.length + 1}:\n\n` +
+      `<b>Пример:</b> <code>Минск, Советская, авто</code>\n\n` +
+      `Слова разделяются запятой — все должны встретиться в тексте (в любом месте, но обязательно все).` +
+      currentGroupsSummary(dialog.data.keywordGroups),
+      { reply_markup: { inline_keyboard: [[{ text: "❌ Отмена", callback_data: "sub_cancel" }]] } });
+  }
+
+  // Завершить ввод групп
+  if (data === "sub_kg:done") {
+    dialog.data.keywords = dialog.data.keywordGroups || [];
+    if (dialog.data.source === "rechitsa") {
+      dialog.data.max_price = 0;
+      const categories = await getCategories(env);
+      return finishSubscription(token, chatId, userId, msgId, dialog, env, categories);
+    }
+    if (dialog.data.source === "torgigov") {
+      dialog.data.max_price = 0;
+      const categories = await getTorgigovCategories(env);
+      return finishSubscription(token, chatId, userId, msgId, dialog, env, categories);
+    }
+    dialog.step = "max_price";
+    await saveDialog(env, userId, dialog);
+    return editMessage(token, chatId, msgId,
+      maxPricePromptText(), { reply_markup: inlineMaxPriceSkip() });
+  }
+
+  // Расширенный поиск
+  if (data.startsWith("sub_custom|")) {
+    const gIdx = parseInt(data.split("|")[1]);
+    dialog.step = "custom_pattern";
+    dialog.data.customGroupIndex = gIdx;
+    await saveDialog(env, userId, dialog);
+    return editMessage(token, chatId, msgId,
+      customPatternHelpText(),
+      { reply_markup: { inline_keyboard: [
+        [{ text: "🔙 Назад", callback_data: `sub_back_to_types|${gIdx}` }],
+        [{ text: "❌ Отмена", callback_data: "sub_cancel" }],
+      ]}});
+  }
+
+  // Назад к выбору типов
+  if (data.startsWith("sub_back_to_types|")) {
+    const gIdx = parseInt(data.split("|")[1]);
+    dialog.step = "keywords_select_types";
+    
+    if (!dialog.data.keywordGroups || !dialog.data.keywordGroups[gIdx]) {
+      await answerCallback(token, cb.id, "Ошибка: группа не найдена");
+      return;
+    }
+    
+    const group = dialog.data.keywordGroups[gIdx];
+    
+    // Перестраиваем flatTokens из новой структуры группы (каждое слово — отдельный элемент с key)
+    dialog.data.currentFlatTokens = group.map(w => ({
+      key:         w.key,
+      displayWord: w.word,
+      fullPhrase:  w.phraseGroup || w.word,
+      isPhrase:    w.isPhrase || false,
+      phraseIdx:   0,
+      wordIdx:     0,
+    }));
+
+    const wordTypes = {};
+    group.forEach(w => {
+      wordTypes[w.key] = w.type || "partial";
+    });
+    
+    await saveDialog(env, userId, dialog);
+    
+    return editMessage(token, chatId, msgId,
+      wordTypesHelpText() + "\n\n" + groupSummaryText(group),
+      { reply_markup: inlineWordTypeChoice(
+        dialog.data.currentFlatTokens,
+        wordTypes,
+        gIdx
+      )});
+  }
+}
+
+async function handleTextInDialog(token, chatId, userId, text, env) {
+  const dialog = await getDialog(env, userId);
+  if (!dialog) return null;
+
+  // Обработка ввода custom pattern
+  if (dialog.step === "custom_pattern") {
+    const gIdx = dialog.data.customGroupIndex;
+    if (!dialog.data.keywordGroups || !dialog.data.keywordGroups[gIdx]) {
+      return sendMessage(token, chatId, "⚠️ Ошибка: группа не найдена.");
+    }
+    
+    const group = dialog.data.keywordGroups[gIdx];
+    group.forEach(w => {
+      w.type = "custom";
+      w.pattern = text;
+    });
+    
+    dialog.step = "keywords_select_types";
+    await saveDialog(env, userId, dialog);
+    
+    return sendMessage(token, chatId,
+      `✅ Шаблон "${text}" применён к группе ${gIdx + 1}\n\n` +
+      groupSummaryText(group),
+      { reply_markup: inlineAddMoreGroups(dialog.data.keywordGroups.length) });
+  }
+
+  // Обработка ввода новой группы ключевых слов
+  if (dialog.step === "keywords_input") {
+    const parsed = parseGroupInput(text);
+    if (parsed.length === 0) {
+      return sendMessage(token, chatId, "⚠️ Введите хотя бы одно слово.");
+    }
+    
+    // Создаём группу: каждое слово (в т.ч. каждое слово фразы) — отдельный элемент.
+    // Слова одной фразы связаны полем phraseGroup = полный текст фразы.
+    const flatTokensNew = buildFlatTokens(parsed);
+    const group = flatTokensNew.map(token => ({
+      key:         token.key,
+      word:        token.displayWord,
+      type:        "partial",
+      isPhrase:    token.isPhrase,
+      phraseGroup: token.isPhrase ? token.fullPhrase : null,
+    }));
+
+    if (!dialog.data.keywordGroups) {
+      dialog.data.keywordGroups = [];
+    }
+    dialog.data.keywordGroups.push(group);
+
+    const groupIndex = dialog.data.keywordGroups.length - 1;
+    dialog.step = "keywords_select_types";
+
+    // Сохраняем parsedParts и flatTokens
+    dialog.data.currentParsedParts = parsed;
+    dialog.data.currentFlatTokens = flatTokensNew;
+
+    // Строим wordTypes по ключу токена
+    const wordTypes = {};
+    group.forEach(w => {
       wordTypes[w.key] = "partial";
     });
     
