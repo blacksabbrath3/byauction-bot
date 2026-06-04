@@ -254,6 +254,19 @@ def send_notifications(slugs: list[str]) -> None:
 # MAIN
 # ════════════════════════════════════════════════════════════
 
+def save_daily_run(total_new: int, slugs_with_new: list[str]) -> None:
+    today = date.today().isoformat()
+    try:
+        r = _post("save-daily-run", {
+            "date":       today,
+            "lots_found": total_new,
+            "categories": slugs_with_new,
+        })
+        print(f"  [✓] /save-daily-run: {r}")
+    except Exception as e:
+        print(f"  [!] /save-daily-run: {e}")
+
+
 def random_delay() -> None:
     import random
     if os.environ.get("SKIP_RANDOM_DELAY", "").lower() == "true":
@@ -311,6 +324,9 @@ def main() -> None:
     else:
         print("[i] Полный сброс не нужен.")
 
+    # Сохраняем дату и результат последнего дневного парсинга в KV
+    save_daily_run(total_new, slugs_with_new)
+
     if slugs_with_new:
         wait_until_notify_time()
         print("\n[4] Отправляю уведомления…")
@@ -331,3 +347,4 @@ if __name__ == "__main__":
         print(f"\n[✗] КРИТИЧЕСКАЯ ОШИБКА: {msg}")
         send_alert(msg)
         sys.exit(1)
+  
