@@ -569,5 +569,204 @@ async function handleCallback(token, update, env) {
     }
   }
 
-  // ── torgigov: выбор категорий ────────────────────────────────
-  if (d
+  //    group.forEach(w => {
+      wordTypes[w.key] = "partial";
+    });
+    
+    await saveDialog(env, userId, dialog);
+    
+    return sendMessage(token, chatId,
+      wordTypesHelpText() + "\n\n" + groupSummaryText(group),
+      { reply_markup: inlineWordTypeChoice(
+        dialog.data.currentFlatTokens,
+        wordTypes,
+        groupIndex
+      )});
+  }
+
+  // Обработка ввода максимальной цены
+  if (dialog.step === "max_price") {
+    const val = parseFloat(text.replace(/\s/g, "").replace(",", "."));
+    if (isNaN(val) || val <= 0) {
+      return sendMessage(token, chatId,
+        `⚠️ Введите положительное число, например: <code>5000</code>\n\nИли нажмите «Без ограничения».`,
+        { reply_markup: inlineMaxPriceSkip() });
+    }
+    dialog.data.max_price = val;
+    const categories = await getCategories(env);
+    return finishSubscription(token, chatId, userId, null, dialog, env, categories);
+  }
+
+  return null;
+}
+
+async function finishSubscription(token, chatId, userId, msgId, dialog, env, categories) {
+  const subs = await getSubs(env, userId);
+  if (subs.length >= MAX_SUBS) {
+    await deleteDialog(env, userId);
+    return sendMessage(token, chatId, `⚠️ Достигнут лимит подписок (${MAX_SUBS}).`);
+  }
+
+  // Очищаем временные данные перед сохранением
+  delete dialog.data.currentFlatTokens;
+  delete dialog.data.currentParsedParts;
+  delete dialog.data.customGroupIndex;
+
+  let sub;
+  if (dialog.data.source === "rechitsa") {
+    sub = {
+      id:       shortUUID(),
+      source:   "rechitsa",
+      keywords: dialog.data.keywordGroups || dialog.data.keywords || [],
+    };
+  } else if (dialog.data.source === "torgigov") {
+    sub = {
+      id:         shortUUID(),
+      source:     "torgigov",
+      categories: dialog.data.categories || [],
+      region:     dialog.data.region     || "all",
+      keywords:   dialog.data.keywordGroups || dialog.data.keywords || [],
+      max_price:  dialog.data.max_price  || 0,
+    };
+  } else {
+    sub = {
+      id:         shortUUID(),
+      source:     "eauction",
+      type:       dialog.data.type       || "auction",
+      categories: dialog.data.categories || [],
+      region:     dialog.data.region     || "keywords",
+      keywords:   dialog.data.keywordGroups || dialog.data.keywords || [],
+      max_price:  dialog.data.max_price  || 0,
+    };
+  }
+
+  subs.push(sub);
+  await saveSubs(env, userId, subs);
+  await deleteDialog(env, userId);
+
+  const text = `✅ <b>Подписка создана:</b>\n\n${subSummary(sub, categories)}`;
+  if (msgId) return editMessage(token, chatId, msgId, text);
+  return sendMessage(token, chatId, text);
+}
+
+// ── /list ─────────────────────────────────────────────────────
+
+async function sendListMessage(token, chatId, userId, env, categories, editMsgId = null) {
+  const subs = await getSubs(env, userId);
+  if (!subs.length) {
+    const text = "📋 У вас нет активных подписок.\n\nСоздайте новую командой /subscribe";
+    if (editMsgId) return editMessage(token, chatId, editMsgId, text);
+    return sendMessage(token, chatId, text);
+  }
+  let text = `📋 <b>Ваши подписки</b> (${subs.length}/${MAX_SUBS}):\n\n`;
+  const keyboard = [];
+  subs.forEach((sub, i) => {
+    text += `<b>${i + 1}.</b> ${subSummary(sub, categories)}\n\n`;
+    keyboard.push([{ text: `❌ Удалить подписку ${i + 1}`, callback_data: `del:${sub.id}` }]);
+  });
+  const reply_markup = { inline_keyboard: keyboard };
+  if (editMsgId) return editMessage(token, chatId, editMsgId, text, { reply_markup });
+  return sendMessage(token, chatId, text, { reply_markup });
+}
+
+// ── Telegram update handler ───────────────────────────────────
+
+async function handleTelegramUpdate(update, env) {
+  const token = env.BOT_TOKEN;
+
+  if (update.callback_query) return handleCallback(token, update, env);
+
+  if (update.my_chat_member) {
+    const status = update.my_chat_member.new_chat_member?.status;
+    if (status === "member") {
+      const chatId = update.my_chat_member.chat.id;
+      await setMyCommands(token);
+      return sendMessage(token, chatId, helpText(), { reply_markup: mainReplyKeyboard() });
+    }
+    return;
+  }
+
+  const msg = update.message;
+  if (!msg || !msg.text) return;
+
+  const chatId = msg.chat.id;
+  const userId = String(msg.from.id);
+  const text   = msg.text.trim();
+
+  if (text === "/start" || text === "/help" || text === "❓ Справка") {
+    await setMyCommands(token);
+    return sendMessage(token, chatId, helpText(), { reply_markup: mainReplyKeyboard(), disable_web_page_preview: true });
+  }
+  if (text === "/subscribe" || text === "➕ Подписаться")
+    return startSubscribeDialog(token, chatId, userId, env);
+  if (text === "/list" || text === "📋 Мои подписки") {
+    const categories = await getCategories(env);
+    return sendListMessage(token, chatId, userId, env, categories);
+  }
+  if (text === "/unsubscribe_all" || text === "🗑 Удалить все подписки") {
+    await saveSubs(env, userId, []);
+    return sendMessage(token, chatId, "✅ Все подписки удалены.");
+  }
+
+  await handleTextInDialog(token, chatId, userId, text, env);
+}
+
+function helpText() {
+  return (
+    `👋 <b>Бот мониторинга торгов и аренды</b>\n\n` +
+    `Отправляю уведомления о новых лотах и публикациях.\n\n` +
+    `<b>Источники:</b>\n` +
+    `• 🏛 <a href="https://e-auction.by">e-auction.by</a> — аукционы и фиксированная цена\n` +
+    `• 🏙 <a href="https://rechitsa.by/gosim">rechitsa.by/gosim</a> — приобретение и аренда недвижимости\n` +
+    `• 🏦 <a href="https://torgi.gov.by">torgi.gov.by</a> — государственная торговая площадка\n\n` +
+    `Используйте кнопки меню ниже 👇`
+  );
+}
+
+// ── Fetch handler ─────────────────────────────────────────────
+
+export default {
+  async fetch(request, env) {
+    try {
+      const url = new URL(request.url);
+
+      // Регистрация webhook: GET /set-webhook (вызвать один раз вручную)
+      if (url.pathname === "/set-webhook") {
+        const webhookUrl = `${url.origin}/webhook`;
+        const params = new URLSearchParams({ url: webhookUrl,
+          allowed_updates: JSON.stringify(["message","callback_query","my_chat_member"]) });
+        if (env.WEBHOOK_SECRET) params.set("secret_token", env.WEBHOOK_SECRET);
+        const r = await fetch(`https://api.telegram.org/bot${env.BOT_TOKEN}/setWebhook?${params}`);
+        const d = await r.json();
+        return new Response(JSON.stringify({ webhookUrl, result: d }), { headers: { "Content-Type": "application/json" } });
+      }
+
+      // Проверка webhook: GET /get-webhook-info
+      if (url.pathname === "/get-webhook-info") {
+        const r = await fetch(`https://api.telegram.org/bot${env.BOT_TOKEN}/getWebhookInfo`);
+        const d = await r.json();
+        return new Response(JSON.stringify(d, null, 2), { headers: { "Content-Type": "application/json" } });
+      }
+
+      if (request.method === "POST" && url.pathname === "/webhook") {
+        const secret = request.headers.get("X-Telegram-Bot-Api-Secret-Token");
+        if (env.WEBHOOK_SECRET && secret !== env.WEBHOOK_SECRET) {
+          return new Response("Forbidden", { status: 403 });
+        }
+        const update = await request.json();
+        await handleTelegramUpdate(update, env);
+        return new Response("OK");
+      }
+      return new Response("Bot Worker — OK", { status: 200 });
+    } catch (e) {
+      console.error("CRASH:", e.message, e.stack);
+      return new Response("OK");
+    }
+  },
+
+  // Запускается по cron-триггеру (если настроен в wrangler.toml)
+  // Также вызывается при деплое если добавить: [[triggers]] crons = ["0 0 1 * *"]
+  async scheduled(event, env, ctx) {
+    // Ничего особенного — webhook регистрируется через /set-webhook вручную
+  },
+};
