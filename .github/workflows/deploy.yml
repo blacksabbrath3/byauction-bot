@@ -23,6 +23,11 @@ jobs:
           apiToken: ${{ secrets.CF_API_TOKEN }}
           accountId: ${{ secrets.CF_ACCOUNT_ID }}
           workingDirectory: for_cloudflare_workers/workers/bot
+      - name: Register Telegram webhook
+        run: |
+          sleep 5
+          curl -s "https://bot-worker.${{ secrets.CF_ACCOUNT_SUBDOMAIN }}.workers.dev/set-webhook"
+        continue-on-error: true
 
   deploy-eauction:
     runs-on: ubuntu-latest
