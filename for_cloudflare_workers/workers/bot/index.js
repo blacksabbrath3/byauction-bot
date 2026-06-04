@@ -202,16 +202,38 @@ async function getCategories(env) {
   return FALLBACK_CATEGORIES;
 }
 
+const TORGIGOV_FALLBACK_CATEGORIES = [
+  { slug: "nedvizhimost",          label: "Недвижимость"          },
+  { slug: "transport-i-zapchasti", label: "Транспорт и запчасти"  },
+  { slug: "oborudovanie",          label: "Оборудование"          },
+  { slug: "komp-yutery",           label: "Компьютеры"            },
+  { slug: "telefony-i-svyaz",      label: "Телефоны и связь"      },
+  { slug: "mebel-i-inter-er",      label: "Мебель и интерьер"     },
+  { slug: "produkty-pitaniya",     label: "Продукты питания"      },
+  { slug: "tehnika-v-bytu",        label: "Техника в быту"        },
+  { slug: "odezhda-obuv-i-dr",     label: "Одежда, обувь и др."   },
+  { slug: "stroitel-stvo",         label: "Строительство"         },
+  { slug: "nematerial-nye",        label: "Нематериальные"        },
+  { slug: "pravo-arendy-i-uslugi", label: "Право аренды и услуги" },
+  { slug: "zhivotnye-i-rasteniya", label: "Животные и растения"   },
+];
+
 async function getTorgigovCategories(env) {
   try {
-    const r = await fetch(`${env.TORGIGOV_WORKER_URL}/categories`, {
-      headers: { "X-API-Key": env.PARSER_SECRET },
-    });
-    if (r.ok) return r.json();
+    const workerUrl = env.TORGIGOV_WORKER_URL;
+    if (workerUrl) {
+      const r = await fetch(`${workerUrl}/categories`, {
+        headers: { "X-API-Key": env.PARSER_SECRET },
+      });
+      if (r.ok) {
+        const cats = await r.json();
+        if (Array.isArray(cats) && cats.length > 0) return cats;
+      }
+    }
   } catch (e) {
     console.warn("getTorgigovCategories fetch failed:", e.message);
   }
-  return [];
+  return TORGIGOV_FALLBACK_CATEGORIES;
 }
 
 function inlineTorgigovCategories(categories, selected) {
@@ -309,7 +331,6 @@ function inlineOblasts() {
   rows.push([{ text: "❌ Отмена", callback_data: "sub_cancel" }]);
   return { inline_keyboard: rows };
 }
-
 // ── Клавиатуры для выбора типов слов ─────────────────────────
 
 /**
@@ -774,9 +795,9 @@ async function handleCallback(token, update, env) {
         wordTypes,
         groupIdx
       )});
-  }
+      }
 
-  // Готово с типами слов
+// Готово с типами слов
   if (data.startsWith("sub_wt_done|")) {
     const gIdx = parseInt(data.split("|")[1]);
     
@@ -1149,4 +1170,4 @@ export default {
   async scheduled(event, env, ctx) {
     // Ничего особенного — webhook регистрируется через /set-webhook вручную
   },
-};
+};  
