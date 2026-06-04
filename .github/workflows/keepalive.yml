@@ -1,0 +1,29 @@
+name: Keep Workflows Active
+
+# GitHub отключает cron-workflows если в репо нет активности 60+ дней.
+# Этот workflow коммитит раз в месяц чтобы этого не происходило.
+
+on:
+  schedule:
+    - cron: '0 12 1 * *'   # 1-го числа каждого месяца в 12:00 UTC
+  workflow_dispatch:
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  keepalive:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4.2.2
+
+      - name: Keep alive commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          echo "keepalive: $(date -u +%Y-%m-%d)" > .github/keepalive.txt
+          git add .github/keepalive.txt
+          git commit -m "chore: keepalive $(date -u +%Y-%m)" || echo "Nothing to commit"
+          git push || echo "Push failed (no changes)"
