@@ -38,21 +38,67 @@ const API_HEADERS = {
 
 // ── Регионы ────────────────────────────────────────────────
 
-const REGION_ALIASES = {
-  "брестская": "Брестская", "витебская": "Витебская",
-  "гомельская": "Гомельская", "гродненская": "Гродненская",
-  "минская": "Минская", "могилёвская": "Могилёвская",
-  "могилевская": "Могилёвская", "г. минск": "Минск",
-  "г.минск": "Минск", "минск": "Минск",
+// Числовые ID регионов из API torgi.gov.by
+const REGION_ID_MAP = {
+  1: "Брестская", 2: "Витебская", 3: "Гомельская",
+  4: "Гродненская", 5: "Минская", 6: "Могилёвская",
+  7: "Брестская", 8: "Витебская", 9: "Гомельская",
+  10: "Гродненская", 11: "Минская", 12: "Могилёвская",
+  13: "Минск",
 };
 
-function normalizeRegion(raw) {
-  if (!raw) return "";
-  const lower = raw.toLowerCase();
-  for (const [key, val] of Object.entries(REGION_ALIASES)) {
+// ID верхнеуровневых категорий → название
+const CATEGORY_ID_MAP = {
+  1: "Недвижимость", 2: "Транспорт и запчасти", 3: "Оборудование",
+  4: "Компьютеры", 5: "Телефоны и связь", 6: "Мебель и интерьер",
+  7: "Продукты питания", 8: "Техника в быту", 9: "Одежда, обувь и др.",
+  10: "Строительство", 11: "Нематериальные", 164: "Животные и растения",
+  167: "Право аренды и услуги",
+};
+
+function resolveRegion(raw) {
+  if (!raw && raw !== 0) return "";
+  // Числовой ID
+  const num = parseInt(raw);
+  if (!isNaN(num) && REGION_ID_MAP[num]) return REGION_ID_MAP[num];
+  // Строковое название (fallback)
+  const lower = String(raw).toLowerCase();
+  const aliases = {
+    "брестская": "Брестская", "витебская": "Витебская",
+    "гомельская": "Гомельская", "гродненская": "Гродненская",
+    "минская": "Минская", "могилёвская": "Могилёвская",
+    "могилевская": "Могилёвская", "г. минск": "Минск", "минск": "Минск",
+  };
+  for (const [key, val] of Object.entries(aliases)) {
     if (lower.includes(key)) return val;
   }
-  return raw;
+  return String(raw);
+}
+
+function resolveCategory(catId, slug) {
+  // Сначала пробуем по числовому ID (если ID верхней категории)
+  const num = parseInt(catId);
+  if (!isNaN(num) && CATEGORY_ID_MAP[num]) return CATEGORY_ID_MAP[num];
+  // Если ID подкатегории — используем slug верхней категории как подсказку
+  if (slug) {
+    const slugLabels = {
+      "nedvizhimost": "Недвижимость",
+      "transport-i-zapchasti": "Транспорт и запчасти",
+      "oborudovanie": "Оборудование",
+      "komp-yutery": "Компьютеры",
+      "telefony-i-svyaz": "Телефоны и связь",
+      "mebel-i-inter-er": "Мебель и интерьер",
+      "produkty-pitaniya": "Продукты питания",
+      "tehnika-v-bytu": "Техника в быту",
+      "odezhda-obuv-i-dr": "Одежда, обувь и др.",
+      "stroitel-stvo": "Строительство",
+      "nematerial-nye": "Нематериальные",
+      "pravo-arendy-i-uslugi": "Право аренды и услуги",
+      "zhivotnye-i-rasteniya": "Животные и растения",
+    };
+    if (slugLabels[slug]) return slugLabels[slug];
+  }
+  return "";
 }
 
 // ── Цена ───────────────────────────────────────────────────
@@ -112,7 +158,7 @@ function matchLot(lot, sub) {
 
   if (sub.region !== "all") {
     const regions   = Array.isArray(sub.region) ? sub.region : [sub.region];
-    const lotRegion = normalizeRegion(lot.region || "").toLowerCase();
+    const lotRegion = resolveRegion(lot.region).toLowerCase();
     const lotLoc    = (lot.location || "").toLowerCase();
     if (!regions.some(r => lotRegion.includes(r.toLowerCase()) || lotLoc.includes(r.toLowerCase()))) {
       return false;
@@ -132,11 +178,13 @@ function matchLot(lot, sub) {
 }
 
 function formatLotMessage(lot) {
+  const region   = resolveRegion(lot.region);
+  const category = resolveCategory(lot.category, lot.slug);
   let msg = `🏛 <a href="${lot.url}">${escapeHtml(lot.title)}</a>`;
   if (lot.price)    msg += `\n💰 ${escapeHtml(lot.price)}`;
-  if (lot.region)   msg += `\n📍 ${escapeHtml(normalizeRegion(lot.region))}`;
+  if (region)       msg += `\n📍 ${escapeHtml(region)}`;
   if (lot.location) msg += ` — ${escapeHtml(lot.location)}`;
-  if (lot.category) msg += `\n🏷 ${escapeHtml(lot.category)}`;
+  if (category)     msg += `\n🏷 ${escapeHtml(category)}`;
   return msg;
 }
 
@@ -276,11 +324,24 @@ async function handleGetCategories(env) {
 
 // GET /status
 async function handleGetStatus(env) {
-  const [last_full_reset, snapshot_ts] = await Promise.all([
+  const [last_full_reset, snapshot_ts, last_daily_run] = await Promise.all([
     env.TORGIGOV_STORAGE.get("last_full_reset"),
     env.TORGIGOV_STORAGE.get("snapshot_timestamp"),
+    env.TORGIGOV_STORAGE.get("last_daily_run"),
   ]);
-  return jsonResponse({ last_full_reset, snapshot_ts, current_time: new Date().toISOString() });
+  return jsonResponse({ last_full_reset, snapshot_ts, last_daily_run, current_time: new Date().toISOString() });
+}
+
+// POST /save-daily-run {date, lots_found}
+async function handleSaveDailyRun(body, env) {
+  const ts = new Date().toISOString();
+  await env.TORGIGOV_STORAGE.put("last_daily_run", JSON.stringify({
+    ts,
+    date:       body.date       ?? ts.slice(0, 10),
+    lots_found: body.lots_found ?? 0,
+    categories: body.categories ?? [],
+  }));
+  return jsonResponse({ ok: true, ts });
 }
 
 // POST /snapshot  {snapshot: {slug: [lotId, ...]}}
@@ -378,6 +439,7 @@ export default {
       if (method === "POST" && path === "/save-daily-lots")    return handleSaveDailyLots(body, env);
       if (method === "POST" && path === "/send-notifications") return handleSendNotifications(body, env);
       if (method === "POST" && path === "/fetch-page")         return handleFetchPage(body);
+      if (method === "POST" && path === "/save-daily-run")     return handleSaveDailyRun(body, env);
 
       return new Response("Not Found", { status: 404 });
     } catch (e) {
