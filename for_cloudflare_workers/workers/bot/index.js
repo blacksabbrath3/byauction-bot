@@ -331,6 +331,7 @@ function inlineOblasts() {
   rows.push([{ text: "❌ Отмена", callback_data: "sub_cancel" }]);
   return { inline_keyboard: rows };
 }
+
 // ── Клавиатуры для выбора типов слов ─────────────────────────
 
 /**
@@ -795,9 +796,9 @@ async function handleCallback(token, update, env) {
         wordTypes,
         groupIdx
       )});
-      }
+  }
 
-// Готово с типами слов
+  // Готово с типами слов
   if (data.startsWith("sub_wt_done|")) {
     const gIdx = parseInt(data.split("|")[1]);
     
@@ -1170,4 +1171,4 @@ export default {
   async scheduled(event, env, ctx) {
     // Ничего особенного — webhook регистрируется через /set-webhook вручную
   },
-};  
+};
