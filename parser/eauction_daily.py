@@ -103,6 +103,7 @@ def fetch_known_lots() -> dict[str, dict[str, int]]:
             headers={"X-API-Key": PARSER_SECRET},
             timeout=30,
         )
+        print(f"  [dbg] /known-lots HTTP {r.status_code}, len={len(r.text)}, body={r.text[:200]}")
         r.raise_for_status()
         data = r.json()
         result = {}
