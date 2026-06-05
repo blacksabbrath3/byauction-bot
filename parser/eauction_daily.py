@@ -29,12 +29,24 @@ PARSER_SECRET = cfg.PARSER_SECRET
 # ПРОВЕРКА НЕОБХОДИМОСТИ ПОЛНОГО СБРОСА
 # ════════════════════════════════════════════════════════════
 
+def _parse_status_ts(ts: str) -> datetime | None:
+    """Парсит timestamp из /status — поддерживает locale и ISO форматы."""
+    if not ts:
+        return None
+    for fmt in ("%d.%m.%Y, %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M:%SZ"):
+        try:
+            return datetime.strptime(ts, fmt).replace(tzinfo=timezone.utc)
+        except ValueError:
+            continue
+    return None
+
+
 def was_snapshot_just_run() -> bool:
     """
     Возвращает True если снапшот был запущен менее SNAPSHOT_GRACE_MINUTES минут назад.
     В этом случае daily пропускает парсинг — нечего искать.
     """
-    grace = getattr(cfg, "SNAPSHOT_GRACE_MINUTES", 60)
+    grace = getattr(cfg, "SNAPSHOT_GRACE_MINUTES", 120)
     try:
         r = lib.SESSION.get(
             f"{WORKER_URL}/status",
@@ -43,27 +55,21 @@ def was_snapshot_just_run() -> bool:
         )
         r.raise_for_status()
         snap_ts = r.json().get("snapshot_ts")
-        if not snap_ts:
-            return False
-        # snapshot_ts может быть в формате locale ("31.05.2026, 10:00:00")
-        # или ISO — пробуем оба
-        snap_dt = None
-        for fmt in ("%d.%m.%Y, %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M:%SZ"):
-            try:
-                snap_dt = datetime.strptime(snap_ts, fmt).replace(tzinfo=timezone.utc)
-                break
-            except ValueError:
-                continue
+        snap_dt = _parse_status_ts(snap_ts)
         if snap_dt is None:
             return False
         minutes_ago = (datetime.now(timezone.utc) - snap_dt).total_seconds() / 60
+        print(f"[i] Снапшот был {minutes_ago:.0f} мин назад (grace={grace} мин)")
         if minutes_ago < grace:
-            print(f"[i] Снапшот был {minutes_ago:.0f} мин назад (< {grace} мин) — пропускаю парсинг.")
+            print(f"[i] → Пропускаю парсинг (снапшот свежий).")
             return True
         return False
     except Exception as e:
         print(f"[!] was_snapshot_just_run: {e}")
         return False
+
+
+def should_do_full_reset() -> bool:
     try:
         r = lib.SESSION.get(
             f"{WORKER_URL}/status",
@@ -72,9 +78,9 @@ def was_snapshot_just_run() -> bool:
         )
         r.raise_for_status()
         last_reset = r.json().get("last_full_reset")
-        if not last_reset:
+        last_dt = _parse_status_ts(last_reset)
+        if last_dt is None:
             return False
-        last_dt = datetime.fromisoformat(last_reset.replace("Z", "+00:00"))
         days = (datetime.now(timezone.utc) - last_dt).days
         print(f"[i] Последний сброс: {last_reset} ({days} дн. назад)")
         return days >= cfg.FULL_RESET_EVERY_DAYS
@@ -103,7 +109,6 @@ def fetch_known_lots() -> dict[str, dict[str, int]]:
             headers={"X-API-Key": PARSER_SECRET},
             timeout=30,
         )
-        print(f"  [dbg] /known-lots HTTP {r.status_code}, len={len(r.text)}, body={r.text[:200]}")
         r.raise_for_status()
         data = r.json()
         result = {}
@@ -379,4 +384,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-      
+  
