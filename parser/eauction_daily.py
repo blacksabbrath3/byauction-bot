@@ -41,20 +41,23 @@ def _parse_status_ts(ts: str) -> datetime | None:
     return None
 
 
+def _worker_get(path: str) -> dict:
+    """GET к eauction worker с правильными заголовками."""
+    r = lib.SESSION.get(
+        f"{WORKER_URL}/{path.lstrip('/')}",
+        headers={"X-API-Key": PARSER_SECRET, "Accept": "application/json"},
+        timeout=30,
+    )
+    print(f"  [dbg] GET /{path} → HTTP {r.status_code}, len={len(r.text)}, body={r.text[:150]}")
+    r.raise_for_status()
+    return r.json()
+
+
 def was_snapshot_just_run() -> bool:
-    """
-    Возвращает True если снапшот был запущен менее SNAPSHOT_GRACE_MINUTES минут назад.
-    В этом случае daily пропускает парсинг — нечего искать.
-    """
     grace = getattr(cfg, "SNAPSHOT_GRACE_MINUTES", 120)
     try:
-        r = lib.SESSION.get(
-            f"{WORKER_URL}/status",
-            headers={"X-API-Key": PARSER_SECRET},
-            timeout=20,
-        )
-        r.raise_for_status()
-        snap_ts = r.json().get("snapshot_ts")
+        data = _worker_get("status")
+        snap_ts = data.get("snapshot_ts")
         snap_dt = _parse_status_ts(snap_ts)
         if snap_dt is None:
             return False
@@ -71,13 +74,8 @@ def was_snapshot_just_run() -> bool:
 
 def should_do_full_reset() -> bool:
     try:
-        r = lib.SESSION.get(
-            f"{WORKER_URL}/status",
-            headers={"X-API-Key": PARSER_SECRET},
-            timeout=20,
-        )
-        r.raise_for_status()
-        last_reset = r.json().get("last_full_reset")
+        data = _worker_get("status")
+        last_reset = data.get("last_full_reset")
         last_dt = _parse_status_ts(last_reset)
         if last_dt is None:
             return False
@@ -104,13 +102,7 @@ def fetch_known_lots() -> dict[str, dict[str, int]]:
     Формат базы не трогаем — конвертация только в памяти Python.
     """
     try:
-        r = lib.SESSION.get(
-            f"{WORKER_URL}/known-lots",
-            headers={"X-API-Key": PARSER_SECRET},
-            timeout=30,
-        )
-        r.raise_for_status()
-        data = r.json()
+        data = _worker_get("known-lots")
         result = {}
         for section, value in data.items():
             if isinstance(value, list):
