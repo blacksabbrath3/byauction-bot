@@ -24,6 +24,7 @@ jobs:
 
       - name: Run snapshot
         env:
+          EAUCTION_WORKER_URL: ${{ secrets.EAUCTION_WORKER_URL }}
           WORKER_URL:    ${{ secrets.WORKER_URL }}
           PARSER_SECRET: ${{ secrets.PARSER_SECRET }}
         working-directory: parser
