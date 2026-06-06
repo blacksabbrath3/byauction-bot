@@ -10,7 +10,11 @@ import os
 # ════════════════════════════════════════════════════════════
 
 # URL воркера e-auction (eauction-worker)
-EAUCTION_WORKER_URL = os.environ.get("WORKER_URL", "").rstrip("/")
+EAUCTION_WORKER_URL = (
+    os.environ.get("EAUCTION_WORKER_URL") or
+    os.environ.get("WORKER_URL") or
+    ""
+).rstrip("/")
 
 # URL воркера rechitsa (rechitsa-worker)
 RECHITSA_WORKER_URL = os.environ.get("RECHITSA_WORKER_URL", "").rstrip("/")
@@ -27,7 +31,7 @@ PARSER_SECRET = os.environ.get("PARSER_SECRET", "")
 # чтобы реальный старт был равномерно распределён между 02:00 и 06:00 UTC.
 # При ручном запуске (workflow_dispatch) задержка пропускается автоматически —
 # переменная окружения SKIP_RANDOM_DELAY=true выставляется в yml.
-RANDOM_DELAY_MAX_SECONDS = 14400  # 4 часа
+RANDOM_DELAY_MAX_SECONDS = 144  # 4 часа
 
 # Время отправки уведомлений подписчикам (UTC).
 # "06:00" UTC = 09:00 Минск (UTC+3).
@@ -99,8 +103,8 @@ SEQ_MIN_MATCHES        = 3    # минимум совпадений в окне
 FULL_RESET_EVERY_DAYS  = 30   # раз в N дней делать полный пересброс
 DESCRIPTION_MAX_LEN    = 500
 # Если снапшот был запущен менее N минут назад — daily пропускает парсинг
-SNAPSHOT_GRACE_MINUTES = int(os.environ.get("SNAPSHOT_GRACE_MINUTES", "120"))
-DAILY_LOTS_TTL_SECONDS = 86400
+SNAPSHOT_GRACE_MINUTES = int(os.environ.get("SNAPSHOT_GRACE_MINUTES", "1"))
+DAILY_LOTS_TTL_SECONDS = 144
 
 EXCLUDE_PATH_PREFIXES = (
     "/info/", "/uslugi/", "/contacts/", "/personal/",
