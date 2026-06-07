@@ -122,7 +122,7 @@ RECHITSA_BASE_URL          = "https://rechitsa.by"
 RECHITSA_GOSIM_URL         = "https://rechitsa.by/gosim"
 RECHITSA_MAX_PAGES         = 5      # максимум страниц при поиске новых статей
 RECHITSA_ARTICLE_TEXT_LIMIT = 500   # символов для excerpt уведомления
-RECHITSA_DAILY_TTL_SECONDS = 86400
+RECHITSA_DAILY_TTL_SECONDS = 144
 
 # Паузы rechitsa
 RECHITSA_DELAY_BETWEEN_ARTICLES = 10.0  # между загрузкой полных статей (сек)
