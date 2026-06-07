@@ -373,15 +373,34 @@ def _extract_price(soup: BeautifulSoup) -> str:
             if m2:
                 return val.strip() + ' BYN'
 
-    # 3. CSS-классы
+    # 3. CSS-классы — расширенный список включая showcase/shop специфику
     for sel in [".lot-price", ".detail-price", ".auction-price", ".price-value",
-                ".product-price", ".showcase-price", ".item-price"]:
+                ".product-price", ".showcase-price", ".item-price",
+                ".price-shop", ".price-shop.large"]:
         el = soup.select_one(sel)
         if el:
             t = _clean(el.get_text())
+            if "справочно" in t.lower():
+                continue
+            # Диапазон цен "120,00 - 320,00 BYN" → берём первое число
+            m = re.search(r'([\d][\d\s]*[.,]\d{2})\s*(?:-\s*[\d][\d\s]*[.,]\d{2}\s*)?BYN', t, re.I)
+            if m:
+                return _clean(m.group(1)) + " BYN"
             m = re.search(r'([\d][\d\s]*[.,]\d{2}\s*BYN)', t)
-            if m and "справочно" not in t.lower():
+            if m:
                 return _clean(m.group(1))
+
+    # 3b. data-price атрибут (showcase: <div class="bx_price price" data-price="240">)
+    el = soup.select_one("[data-price]")
+    if el:
+        val = el.get("data-price", "").strip()
+        if val and re.match(r'^[\d.,\s]+$', val):
+            try:
+                num = float(val.replace(",", ".").replace(" ", ""))
+                if num > 0:
+                    return f"{num:,.2f}".replace(",", " ") + " BYN"
+            except ValueError:
+                pass
 
     # 4. Первое «N... BYN» в тексте без «справочно»
     for line in soup.get_text("\n").splitlines():
@@ -556,9 +575,4 @@ def parse_lot_details(stored_path: str, section: str = "") -> dict:
     d["price"]    = _extract_price(soup)
     d["location"] = _extract_location(rows)
     d["area"]     = _extract_area(rows)
-    d["description"] = _extract_description(soup, d["location"], section)
-
-    if d["description"] and len(d["description"]) > cfg.DESCRIPTION_MAX_LEN:
-        d["description"] = d["description"][:cfg.DESCRIPTION_MAX_LEN] + "…"
-
-    return d
+    d["description"] = _extract_description(soup, d["l
