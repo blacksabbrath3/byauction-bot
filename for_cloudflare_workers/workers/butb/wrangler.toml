@@ -4,11 +4,11 @@ compatibility_date = "2024-01-01"
 
 [[kv_namespaces]]
 binding = "BUTB_STORAGE"
-id = "REPLACE_WITH_YOUR_KV_ID"
+id = "2c78cefcc7f141838b4ddd5f1dc21c26"
 
 [[kv_namespaces]]
 binding = "SUBSCRIBERS"
-id = "REPLACE_WITH_SUBSCRIBERS_KV_ID"
+id = "c1f5a6b255264509ac2ed8f24bf9c511"
 
 # Secrets (set via: wrangler secret put BOT_TOKEN, wrangler secret put PARSER_SECRET):
 # BOT_TOKEN
