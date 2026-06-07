@@ -568,11 +568,15 @@ def parse_lot_details(stored_path: str, section: str = "") -> dict:
         if el:
             d["title"] = _clean_title(el.get_text())
             break
-
-    # Собираем все строки таблиц один раз
+# Собираем все строки таблиц один раз
     rows = _all_table_rows(soup)
 
     d["price"]    = _extract_price(soup)
     d["location"] = _extract_location(rows)
     d["area"]     = _extract_area(rows)
-    d["description"] = _extract_description(soup, d["l
+    d["description"] = _extract_description(soup, d["location"], section)
+
+    if d["description"] and len(d["description"]) > cfg.DESCRIPTION_MAX_LEN:
+        d["description"] = d["description"][:cfg.DESCRIPTION_MAX_LEN] + "…"
+
+    return d
