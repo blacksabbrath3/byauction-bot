@@ -1,0 +1,34 @@
+name: butb_snapshot
+
+on:
+  workflow_dispatch:
+  # Можно добавить schedule если нужен автоматический ежемесячный пересброс:
+  # schedule:
+  #   - cron: "0 3 1 * *"  # 1-е число каждого месяца в 03:00 UTC
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install requests beautifulsoup4
+
+      - name: Run butb_snapshot
+        env:
+          BUTB_WORKER_URL:  ${{ secrets.BUTB_WORKER_URL }}
+          PARSER_SECRET:    ${{ secrets.PARSER_SECRET }}
+          SKIP_RANDOM_DELAY: "true"
+        run: |
+          cd parser
+          python butb_snapshot.py
