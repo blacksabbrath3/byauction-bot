@@ -159,9 +159,9 @@ def send_alert(error: str) -> None:
 
 def parse_daily(known_ids: set[str]) -> list[dict]:
     """
-    Обходит все страницы листинга и собирает новые лоты.
-    Обходим ВСЕ страницы — БУТБ не гарантирует хронологический
-    порядок, новый лот может быть на любой странице.
+    Обходит страницы листинга и собирает новые лоты.
+    Останавливается когда find_new_lots_by_id сработал по порогу
+    (3 известных подряд) — значит дошли до старых лотов.
     """
     print(f"\n[→] Загружаю страницу 1…")
     soup = lib.fetch_listing_page(page=1)
@@ -180,7 +180,7 @@ def parse_daily(known_ids: set[str]) -> list[dict]:
     all_new.extend(new_on_page)
     print(f"    стр. 1: лотов={len(lots)}, новых={len(new_on_page)}")
 
-    # Если на первой странице встретился известный лот — дальше не идём
+    # Функция вернула меньше лотов чем на странице — порог сработал, дальше не идём
     if len(new_on_page) < len(lots):
         return all_new
 
@@ -201,7 +201,7 @@ def parse_daily(known_ids: set[str]) -> list[dict]:
         all_new.extend(new_on_page)
         print(f"    стр. {page}: лотов={len(lots)}, новых={len(new_on_page)}")
 
-        # Встретили известный лот — дальше не идём
+        # Порог сработал — дальше не идём
         if len(new_on_page) < len(lots):
             break
 
@@ -328,3 +328,4 @@ if __name__ == "__main__":
         print(f"\n[✗] КРИТИЧЕСКАЯ ОШИБКА: {msg}")
         send_alert(msg)
         sys.exit(1)
+      
