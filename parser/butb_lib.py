@@ -331,18 +331,27 @@ def fetch_listing_page(page: int = 1, base_state: dict | None = None) -> Beautif
 def find_new_lots_by_id(
     fetched_lots: list[dict],
     known_ids: set[str],
+    consecutive_known_threshold: int = 3,
 ) -> list[dict]:
     """
     Возвращает лоты с неизвестными ID.
-    Лоты идут в хронологическом порядке (новые — первые),
-    поэтому останавливаемся при первом известном ID.
+    Лоты идут в хронологическом порядке (новые — первые).
+    Останавливаемся после consecutive_known_threshold известных
+    лотов подряд — надёжнее чем break на первом совпадении,
+    т.к. в снапшоте могут быть пропуски (удалённые лоты и т.п.).
     """
     new_lots = []
+    consecutive = 0
     for lot in fetched_lots:
         lid = lot.get("lot_id", "")
         if not lid:
             continue
         if lid in known_ids:
-            break
-        new_lots.append(lot)
+            consecutive += 1
+            if consecutive >= consecutive_known_threshold:
+                break
+        else:
+            consecutive = 0
+            new_lots.append(lot)
     return new_lots
+  
