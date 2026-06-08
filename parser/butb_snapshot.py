@@ -139,7 +139,6 @@ def main() -> None:
         raise RuntimeError("Снапшот пуст — возможно, сайт недоступен")
 
     save_snapshot(snapshot)
-    save_categories()
 
     print(f"\n{'=' * 60}")
     print("  Снапшот завершён.")
