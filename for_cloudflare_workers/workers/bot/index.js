@@ -94,6 +94,13 @@ function subSummary(sub, categories) {
     }
     return lines.join("\n");
   }
+  if (sub.source === "butb") {
+    const lines = ["🏗 <b>БУТБ</b> — имущество (et.butb.by)"];
+    lines.push(sub.keywords?.length > 0
+      ? `<b>Ключевые слова:</b> ${formatKeywordGroups(sub.keywords)}`
+      : "<b>Ключевые слова:</b> все уведомления");
+    return lines.join("\n");
+  }
   const typeLabel = sub.type === "auction" ? "🔨 Аукцион" : "💰 Фиксированная цена";
   const lines = [`🏛 <b>e-auction.by</b> — ${typeLabel}`];
   if (sub.type === "auction") {
@@ -282,6 +289,7 @@ function inlineSourceChoice() {
     [{ text: "🏛 e-auction.by — торги",                            callback_data: "sub_src:eauction" }],
     [{ text: "🏙 Речицкий райисполком — аренда и покупка недвижимости", callback_data: "sub_src:rechitsa" }],
     [{ text: "🏦 torgi.gov.by — государственная торговая площадка",  callback_data: "sub_src:torgigov" }],
+    [{ text: "🏗 БУТБ — имущество (et.butb.by)",                    callback_data: "sub_src:butb"     }],
     [{ text: "❌ Отмена", callback_data: "sub_cancel" }],
   ]};
 }
@@ -441,7 +449,9 @@ function keywordsPromptText(source) {
     ? "📋 <b>Новая подписка — Речицкий райисполком</b>\n\n"
     : source === "torgigov"
       ? "📋 <b>Новая подписка — torgi.gov.by</b>\n\n"
-      : "📋 <b>Новая подписка — e-auction.by</b>\n\n";
+      : source === "butb"
+        ? "📋 <b>Новая подписка — БУТБ (et.butb.by)</b>\n\n"
+        : "📋 <b>Новая подписка — e-auction.by</b>\n\n";
   return (
     `${prefix}<b>Ключевые слова</b> (необязательно):\n\n` +
     `Введите слова или фразы через <b>запятую</b>. Все слова из группы должны встретиться в тексте лота (в любом месте, но обязательно все).\n\n` +
@@ -582,6 +592,13 @@ async function handleCallback(token, update, env) {
       return editMessage(token, chatId, msgId,
         `📋 <b>Новая подписка — torgi.gov.by</b>\n\nШаг 1 из 3 — Выберите категории (можно несколько):`,
         { reply_markup: inlineTorgigovCategories(tgCats, []) });
+    } else if (source === "butb") {
+      dialog.step = "keywords_input";
+      dialog.data.keywordGroups = [];
+      await saveDialog(env, userId, dialog);
+      return editMessage(token, chatId, msgId,
+        keywordsPromptText("butb") + currentGroupsSummary(dialog.data.keywordGroups),
+        { reply_markup: inlineKeywordsSkip() });
     } else {
       dialog.step = "type";
       await saveDialog(env, userId, dialog);
@@ -1029,6 +1046,12 @@ async function finishSubscription(token, chatId, userId, msgId, dialog, env, cat
       region:     dialog.data.region     || "all",
       keywords:   dialog.data.keywordGroups || dialog.data.keywords || [],
       max_price:  dialog.data.max_price  || 0,
+    };
+  } else if (dialog.data.source === "butb") {
+    sub = {
+      id:       shortUUID(),
+      source:   "butb",
+      keywords: dialog.data.keywordGroups || dialog.data.keywords || [],
     };
   } else {
     sub = {
