@@ -136,12 +136,14 @@ async function handleAddLots(body, env) {
   }
   const raw      = await env.BUTB_STORAGE.get("known_lots");
   const known    = raw ? JSON.parse(raw) : {};
-  const existing = new Set(known[slug] || []);
-  const newOnes  = lot_ids.filter(id => !existing.has(String(id)));
+  const existing = new Set((known[slug] || []).map(String));
+  const incoming = lot_ids.map(String);
+  const newOnes  = incoming.filter(id => !existing.has(id));
   if (newOnes.length > 0) {
     known[slug] = [...newOnes, ...(known[slug] || [])];
     await env.BUTB_STORAGE.put("known_lots", JSON.stringify(known));
   }
+  console.log(`add-lots: slug=${slug} incoming=${incoming.length} new=${newOnes.length}`);
   return jsonResponse({ ok: true, added: newOnes.length });
 }
 
@@ -214,7 +216,7 @@ async function handleSendNotifications(body, env) {
 
     return {
       text:    lines.join("\n"),
-      matchFn: (sub) => matchKeywords(searchText, sub.keywords),
+      matchFn: (sub) => sub.source === "butb" && matchKeywords(searchText, sub.keywords),
     };
   });
 
