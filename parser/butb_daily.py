@@ -159,9 +159,9 @@ def send_alert(error: str) -> None:
 
 def parse_daily(known_ids: set[str]) -> list[dict]:
     """
-    Обходит страницы листинга и собирает новые лоты.
-    Останавливается когда встречает известный lot_id
-    или все страницы исчерпаны.
+    Обходит все страницы листинга и собирает новые лоты.
+    Обходим ВСЕ страницы — БУТБ не гарантирует хронологический
+    порядок, новый лот может быть на любой странице.
     """
     print(f"\n[→] Загружаю страницу 1…")
     soup = lib.fetch_listing_page(page=1)
@@ -175,28 +175,22 @@ def parse_daily(known_ids: set[str]) -> list[dict]:
 
     all_new: list[dict] = []
 
-    # Обрабатываем первую страницу
     lots = lib.parse_lots_from_soup(soup)
-    if not lots:
-        print("[i] Страница 1 пуста")
-        return []
-
     new_on_page = lib.find_new_lots_by_id(lots, known_ids)
     all_new.extend(new_on_page)
     print(f"    стр. 1: лотов={len(lots)}, новых={len(new_on_page)}")
 
-    # Если на странице были известные — дальше идти не нужно
+    # Если на первой странице встретился известный лот — дальше не идём
     if len(new_on_page) < len(lots):
         return all_new
 
-    # Обходим следующие страницы если все лоты на текущей — новые
     for page in range(2, total_pages + 1):
         lib.pause(cfg.DELAY_BETWEEN_LIST_PAGES)
         print(f"\n[→] Загружаю страницу {page}/{total_pages}…")
         soup = lib.fetch_listing_page(page=page, base_state=base_state)
         if not soup:
-            print(f"  [!] Страница {page} недоступна — останавливаюсь")
-            break
+            print(f"  [!] Страница {page} недоступна — пропускаю")
+            continue
 
         lots = lib.parse_lots_from_soup(soup)
         if not lots:
@@ -207,6 +201,7 @@ def parse_daily(known_ids: set[str]) -> list[dict]:
         all_new.extend(new_on_page)
         print(f"    стр. {page}: лотов={len(lots)}, новых={len(new_on_page)}")
 
+        # Встретили известный лот — дальше не идём
         if len(new_on_page) < len(lots):
             break
 
