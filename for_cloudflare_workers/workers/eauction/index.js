@@ -11,6 +11,7 @@ import { matchKeywords }                        from "../../shared/matchKeyword.
 import { sendNotifications }                    from "../../shared/subscribers.js";
 import { tgSend }                               from "../../shared/telegram.js";
 import { escapeHtml, jsonResponse, checkAuth }  from "../../shared/format.js";
+import { matchRegion }                         from "../../shared/region.js";
 
 // ── Константы ─────────────────────────────────────────────────
 
@@ -47,7 +48,12 @@ function parsePriceByn(priceStr) {
 // ── Матчинг ───────────────────────────────────────────────────
 
 function matchLot(lot, sub) {
-  if (!sub.source || sub.source !== "eauction") return false;
+  if (!sub.source) return false;
+  if (sub.source === "multi") {
+    if (!(sub.sources || []).includes("eauction")) return false;
+  } else if (sub.source !== "eauction") {
+    return false;
+  }
 
   const isAuction = AUCTION_SECTIONS.includes(lot.section);
   if (sub.type === "auction" && !isAuction) return false;
@@ -58,11 +64,7 @@ function matchLot(lot, sub) {
     if (!sub.categories.some(slug => url.includes(`/${slug}/`))) return false;
   }
 
-  if (sub.region !== "all") {
-    const regions = Array.isArray(sub.region) ? sub.region : [sub.region];
-    const loc     = (lot.location || "").toLowerCase();
-    if (!regions.some(r => loc.includes(r.toLowerCase()))) return false;
-  }
+  if (!matchRegion(sub.region, lot.location)) return false;
 
   const text = [lot.title, lot.description, lot.location].join(" ").toLowerCase();
   if (!matchKeywords(text, sub.keywords)) return false;
