@@ -21,6 +21,7 @@
 import { matchKeywords }                       from "../../shared/matchKeyword.js";
 import { sendNotifications }                   from "../../shared/subscribers.js";
 import { escapeHtml, jsonResponse, checkAuth } from "../../shared/format.js";
+import { matchRegion }                         from "../../shared/region.js";
 
 // ── Константы ──────────────────────────────────────────────
 
@@ -216,7 +217,12 @@ async function handleSendNotifications(body, env) {
 
     return {
       text:    lines.join("\n"),
-      matchFn: (sub) => sub.source === "butb" && matchKeywords(searchText, sub.keywords),
+      matchFn: (sub) => {
+        if (sub.source !== "butb" && sub.source !== "multi") return false;
+        if (sub.source === "multi" && !(sub.sources || []).includes("butb")) return false;
+        if (!matchRegion(sub.region, lot.location)) return false;
+        return matchKeywords(searchText, sub.keywords);
+      },
     };
   });
 
