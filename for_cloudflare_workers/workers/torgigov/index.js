@@ -23,6 +23,7 @@
 import { matchKeywords }                       from "../../shared/matchKeyword.js";
 import { sendNotifications }                   from "../../shared/subscribers.js";
 import { escapeHtml, jsonResponse, checkAuth } from "../../shared/format.js";
+import { matchRegion }                         from "../../shared/region.js";
 
 // ── Константы ──────────────────────────────────────────────
 
@@ -146,7 +147,12 @@ function normalizeLot(raw, categorySlug) {
 // ── Матчинг подписки ───────────────────────────────────────
 
 function matchLot(lot, sub) {
-  if (!sub.source || sub.source !== "torgigov") return false;
+  if (!sub.source) return false;
+  if (sub.source === "multi") {
+    if (!(sub.sources || []).includes("torgigov")) return false;
+  } else if (sub.source !== "torgigov") {
+    return false;
+  }
 
   if (sub.categories?.length > 0) {
     const lotSlug = lot.slug || "";
@@ -156,14 +162,8 @@ function matchLot(lot, sub) {
     }
   }
 
-  if (sub.region !== "all") {
-    const regions   = Array.isArray(sub.region) ? sub.region : [sub.region];
-    const lotRegion = resolveRegion(lot.region).toLowerCase();
-    const lotLoc    = (lot.location || "").toLowerCase();
-    if (!regions.some(r => lotRegion.includes(r.toLowerCase()) || lotLoc.includes(r.toLowerCase()))) {
-      return false;
-    }
-  }
+  const lotLocationText = resolveRegion(lot.region) + " " + (lot.location || "");
+  if (!matchRegion(sub.region, lotLocationText)) return false;
 
   const text = [lot.title, lot.category, lot.location].join(" ").toLowerCase();
   if (!matchKeywords(text, sub.keywords)) return false;
