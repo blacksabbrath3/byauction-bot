@@ -689,15 +689,16 @@ async function handleCallback(token, update, env) {
         `📋 <b>Несколько сайтов</b>\n\nВыберите область:`,
         { reply_markup: inlineOblasts() });
     }
-    if (data.startsWith("sub_obl:") && dialog.step === "multi_region_oblast") {
-      dialog.data.region    = [data.slice(8)];
-      dialog.step           = "keywords_input";
-      dialog.data.keywordGroups = [];
-      await saveDialog(env, userId, dialog);
-      return editMessage(token, chatId, msgId,
-        keywordsPromptText("multi") + currentGroupsSummary([]),
-        { reply_markup: inlineKeywordsSkip() });
-    }
+  }
+
+  if (data.startsWith("sub_obl:") && dialog.step === "multi_region_oblast") {
+    dialog.data.region    = [data.slice(8)];
+    dialog.step           = "keywords_input";
+    dialog.data.keywordGroups = [];
+    await saveDialog(env, userId, dialog);
+    return editMessage(token, chatId, msgId,
+      keywordsPromptText("multi") + currentGroupsSummary([]),
+      { reply_markup: inlineKeywordsSkip() });
   }
 
   // ── torgigov: выбор категорий ────────────────────────────────
