@@ -13,15 +13,12 @@
 
 import { escapeHtml, jsonResponse }          from "../../shared/format.js";
 import { tgCall, sendMessage, editMessage, answerCallback } from "../../shared/telegram.js";
+import { REGIONS, regionLabel, matchRegion } from "../../shared/region.js";
+import { SOURCES, sourceById }               from "../../shared/sources.js";
 
 const MAX_SUBS   = 10;
 const DIALOG_TTL = 1800; // 30 мин
 const MAX_KEYWORD_GROUPS = 15;
-
-const REGIONS = [
-  "Брестская", "Витебская", "Гомельская",
-  "Гродненская", "Минская", "Могилёвская",
-];
 
 const FALLBACK_CATEGORIES = [
   { slug: "legkovye_avtomobili",                           label: "Легковые автомобили" },
@@ -39,13 +36,6 @@ const FALLBACK_CATEGORIES = [
 
 function shortUUID() {
   return crypto.randomUUID().replace(/-/g, "").slice(0, 8);
-}
-
-function regionLabel(r) {
-  if (r === "all") return "🌍 Вся страна";
-  if (r === "keywords") return "🔤 По ключевым словам";
-  if (Array.isArray(r)) return r.join(", ");
-  return r;
 }
 
 function categoryLabels(categories, slugs) {
@@ -75,6 +65,17 @@ function wordMatchTypeLabel(type) {
 }
 
 function subSummary(sub, categories) {
+  if (sub.source === "multi") {
+    const srcLabels = (sub.sources || [])
+      .map(id => sourceById(id)?.label || id)
+      .join(", ");
+    const lines = [`🔀 <b>Несколько сайтов:</b> ${srcLabels}`];
+    lines.push(`<b>Регион:</b> ${regionLabel(sub.region)}`);
+    lines.push(sub.keywords?.length > 0
+      ? `<b>Ключевые слова:</b> ${formatKeywordGroups(sub.keywords)}`
+      : "<b>Ключевые слова:</b> все уведомления");
+    return lines.join("\n");
+  }
   if (sub.source === "rechitsa") {
     const lines = ["🏙 <b>Речицкий райисполком</b> — приобретение и аренда"];
     lines.push(sub.keywords?.length > 0
@@ -96,6 +97,7 @@ function subSummary(sub, categories) {
   }
   if (sub.source === "butb") {
     const lines = ["🏗 <b>БУТБ</b> — имущество (et.butb.by)"];
+    lines.push(`<b>Регион:</b> ${regionLabel(sub.region)}`);
     lines.push(sub.keywords?.length > 0
       ? `<b>Ключевые слова:</b> ${formatKeywordGroups(sub.keywords)}`
       : "<b>Ключевые слова:</b> все уведомления");
@@ -286,12 +288,25 @@ function mainReplyKeyboard() {
 
 function inlineSourceChoice() {
   return { inline_keyboard: [
-    [{ text: "🏛 e-auction.by — торги",                            callback_data: "sub_src:eauction" }],
+    [{ text: "🔀 Несколько сайтов сразу",                            callback_data: "sub_src:multi"    }],
+    [{ text: "🏛 e-auction.by — торги",                              callback_data: "sub_src:eauction" }],
     [{ text: "🏙 Речицкий райисполком — аренда и покупка недвижимости", callback_data: "sub_src:rechitsa" }],
     [{ text: "🏦 torgi.gov.by — государственная торговая площадка",  callback_data: "sub_src:torgigov" }],
-    [{ text: "🏗 БУТБ — имущество (et.butb.by)",                    callback_data: "sub_src:butb"     }],
+    [{ text: "🏗 БУТБ — имущество (et.butb.by)",                     callback_data: "sub_src:butb"     }],
     [{ text: "❌ Отмена", callback_data: "sub_cancel" }],
   ]};
+}
+
+function inlineMultiSourcePick(selected) {
+  const rows = SOURCES.map(s => {
+    const checked = selected.includes(s.id) ? "✅ " : "◻️ ";
+    return [{ text: `${checked}${s.label} — ${s.description}`, callback_data: `sub_msc:${s.id}` }];
+  });
+  rows.push([
+    { text: "✔️ Готово", callback_data: "sub_msc:done" },
+    { text: "❌ Отмена", callback_data: "sub_cancel"   },
+  ]);
+  return { inline_keyboard: rows };
 }
 
 function inlineTypeChoice() {
@@ -451,7 +466,9 @@ function keywordsPromptText(source) {
       ? "📋 <b>Новая подписка — torgi.gov.by</b>\n\n"
       : source === "butb"
         ? "📋 <b>Новая подписка — БУТБ (et.butb.by)</b>\n\n"
-        : "📋 <b>Новая подписка — e-auction.by</b>\n\n";
+        : source === "multi"
+          ? "📋 <b>Новая подписка — несколько сайтов</b>\n\n"
+          : "📋 <b>Новая подписка — e-auction.by</b>\n\n";
   return (
     `${prefix}<b>Ключевые слова</b> (необязательно):\n\n` +
     `Введите слова или фразы через <b>запятую</b>. Все слова из группы должны встретиться в тексте лота (в любом месте, но обязательно все).\n\n` +
@@ -576,7 +593,14 @@ async function handleCallback(token, update, env) {
     const source = data.slice(8);
     dialog.data.source = source;
 
-    if (source === "rechitsa") {
+    if (source === "multi") {
+      dialog.step = "multi_sources";
+      dialog.data.multiSources = [];
+      await saveDialog(env, userId, dialog);
+      return editMessage(token, chatId, msgId,
+        `📋 <b>Новая подписка — несколько сайтов сразу</b>\n\nШаг 1 из 3 — Выберите сайты (можно несколько):`,
+        { reply_markup: inlineMultiSourcePick([]) });
+    } else if (source === "rechitsa") {
       dialog.step = "keywords_input";
       dialog.data.keywordGroups = [];
       await saveDialog(env, userId, dialog);
@@ -593,18 +617,86 @@ async function handleCallback(token, update, env) {
         `📋 <b>Новая подписка — torgi.gov.by</b>\n\nШаг 1 из 3 — Выберите категории (можно несколько):`,
         { reply_markup: inlineTorgigovCategories(tgCats, []) });
     } else if (source === "butb") {
-      dialog.step = "keywords_input";
-      dialog.data.keywordGroups = [];
+      dialog.step = "region";
       await saveDialog(env, userId, dialog);
       return editMessage(token, chatId, msgId,
-        keywordsPromptText("butb") + currentGroupsSummary(dialog.data.keywordGroups),
-        { reply_markup: inlineKeywordsSkip() });
+        `📋 <b>Новая подписка — БУТБ (et.butb.by)</b>\n\nШаг 1 из 2 — Выберите регион:`,
+        { reply_markup: inlineRegion() });
     } else {
       dialog.step = "type";
       await saveDialog(env, userId, dialog);
       return editMessage(token, chatId, msgId,
         `📋 <b>Новая подписка — e-auction.by</b>\n\nШаг 1 из 3 — Что отслеживать?`,
         { reply_markup: inlineTypeChoice() });
+    }
+  }
+
+  // ── Мультиподписка: выбор сайтов ─────────────────────────────
+  if (data.startsWith("sub_msc:") && dialog.step === "multi_sources") {
+    const id       = data.slice(8);
+    let selected   = dialog.data.multiSources || [];
+
+    if (id === "done") {
+      if (selected.length === 0) {
+        return answerCallback(token, cb.id, "⚠️ Выберите хотя бы один сайт");
+      }
+      // Переходим к выбору региона (только если хоть один источник поддерживает регион)
+      const needRegion = selected.some(s => sourceById(s)?.hasRegion);
+      if (needRegion) {
+        dialog.step = "multi_region";
+        await saveDialog(env, userId, dialog);
+        return editMessage(token, chatId, msgId,
+          `📋 <b>Несколько сайтов</b>\n\nШаг 2 из 3 — Выберите регион поиска:`,
+          { reply_markup: inlineRegion() });
+      } else {
+        dialog.step = "keywords_input";
+        dialog.data.keywordGroups = [];
+        dialog.data.region = "all";
+        await saveDialog(env, userId, dialog);
+        return editMessage(token, chatId, msgId,
+          keywordsPromptText("multi") + currentGroupsSummary([]),
+          { reply_markup: inlineKeywordsSkip() });
+      }
+    }
+
+    if (selected.includes(id)) {
+      selected = selected.filter(s => s !== id);
+    } else {
+      selected = [...selected, id];
+    }
+    dialog.data.multiSources = selected;
+    await saveDialog(env, userId, dialog);
+    return editMessage(token, chatId, msgId,
+      `📋 <b>Новая подписка — несколько сайтов сразу</b>\n\nШаг 1 из 3 — Выберите сайты (можно несколько):`,
+      { reply_markup: inlineMultiSourcePick(selected) });
+  }
+
+  // ── Мультиподписка: регион ────────────────────────────────────
+  if (dialog.step === "multi_region") {
+    if (data === "sub_reg:all" || data === "sub_reg:words") {
+      dialog.data.region    = data === "sub_reg:all" ? "all" : "keywords";
+      dialog.step           = "keywords_input";
+      dialog.data.keywordGroups = [];
+      await saveDialog(env, userId, dialog);
+      return editMessage(token, chatId, msgId,
+        keywordsPromptText("multi") + currentGroupsSummary([]),
+        { reply_markup: inlineKeywordsSkip() });
+    }
+    if (data === "sub_reg:oblast") {
+      dialog.step = "multi_region_oblast";
+      await saveDialog(env, userId, dialog);
+      return editMessage(token, chatId, msgId,
+        `📋 <b>Несколько сайтов</b>\n\nВыберите область:`,
+        { reply_markup: inlineOblasts() });
+    }
+    if (data.startsWith("sub_obl:") && dialog.step === "multi_region_oblast") {
+      dialog.data.region    = [data.slice(8)];
+      dialog.step           = "keywords_input";
+      dialog.data.keywordGroups = [];
+      await saveDialog(env, userId, dialog);
+      return editMessage(token, chatId, msgId,
+        keywordsPromptText("multi") + currentGroupsSummary([]),
+        { reply_markup: inlineKeywordsSkip() });
     }
   }
 
@@ -708,24 +800,27 @@ async function handleCallback(token, update, env) {
     dialog.step = "keywords_input";
     dialog.data.keywordGroups = [];
     await saveDialog(env, userId, dialog);
+    const src = dialog.data.source;
     return editMessage(token, chatId, msgId,
-      keywordsPromptText("eauction") + currentGroupsSummary(dialog.data.keywordGroups),
+      keywordsPromptText(src) + currentGroupsSummary(dialog.data.keywordGroups),
       { reply_markup: inlineKeywordsSkip() });
   }
   if (data === "sub_reg:oblast") {
     dialog.step = "region_oblast";
     await saveDialog(env, userId, dialog);
-    return editMessage(token, chatId, msgId,
-      `📋 <b>Новая подписка — e-auction.by</b>\n\nВыберите область:`,
-      { reply_markup: inlineOblasts() });
+    const title = dialog.data.source === "butb"
+      ? `📋 <b>Новая подписка — БУТБ (et.butb.by)</b>\n\nВыберите область:`
+      : `📋 <b>Новая подписка — e-auction.by</b>\n\nВыберите область:`;
+    return editMessage(token, chatId, msgId, title, { reply_markup: inlineOblasts() });
   }
   if (data.startsWith("sub_obl:") && dialog.step === "region_oblast") {
     dialog.data.region = [data.slice(8)];
     dialog.step = "keywords_input";
     dialog.data.keywordGroups = [];
     await saveDialog(env, userId, dialog);
+    const src = dialog.data.source;
     return editMessage(token, chatId, msgId,
-      keywordsPromptText("eauction") + currentGroupsSummary(dialog.data.keywordGroups),
+      keywordsPromptText(src) + currentGroupsSummary(dialog.data.keywordGroups),
       { reply_markup: inlineKeywordsSkip() });
   }
 
@@ -734,8 +829,9 @@ async function handleCallback(token, update, env) {
     dialog.step = "keywords_input";
     dialog.data.keywordGroups = [];
     await saveDialog(env, userId, dialog);
+    const src = dialog.data.source;
     return editMessage(token, chatId, msgId,
-      keywordsPromptText("eauction") + currentGroupsSummary(dialog.data.keywordGroups),
+      keywordsPromptText(src) + currentGroupsSummary(dialog.data.keywordGroups),
       { reply_markup: inlineKeywordsSkip() });
   }
 
@@ -1032,7 +1128,15 @@ async function finishSubscription(token, chatId, userId, msgId, dialog, env, cat
   delete dialog.data.customGroupIndex;
 
   let sub;
-  if (dialog.data.source === "rechitsa") {
+  if (dialog.data.source === "multi") {
+    sub = {
+      id:       shortUUID(),
+      source:   "multi",
+      sources:  dialog.data.multiSources || [],
+      region:   dialog.data.region || "all",
+      keywords: dialog.data.keywordGroups || dialog.data.keywords || [],
+    };
+  } else if (dialog.data.source === "rechitsa") {
     sub = {
       id:       shortUUID(),
       source:   "rechitsa",
@@ -1051,6 +1155,7 @@ async function finishSubscription(token, chatId, userId, msgId, dialog, env, cat
     sub = {
       id:       shortUUID(),
       source:   "butb",
+      region:   dialog.data.region || "all",
       keywords: dialog.data.keywordGroups || dialog.data.keywords || [],
     };
   } else {
