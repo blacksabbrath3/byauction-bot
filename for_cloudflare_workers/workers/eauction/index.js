@@ -15,8 +15,8 @@ import { matchRegion }                         from "../../shared/region.js";
 
 // ── Константы ─────────────────────────────────────────────────
 
-const AUCTION_SECTIONS = ["auction", "commerce", "gos"];
-const FIXED_SECTIONS   = ["shop", "showcase"];
+const AUCTION_SECTIONS = ["auction", "gos"];        // commerce убрали — не показываем отдельно
+const FIXED_SECTIONS   = ["shop", "showcase", "commerce"];
 const ALL_SECTIONS     = [...AUCTION_SECTIONS, ...FIXED_SECTIONS];
 
 const FALLBACK_CATEGORIES = [
@@ -56,13 +56,14 @@ function matchLot(lot, sub) {
   }
 
   const isAuction = AUCTION_SECTIONS.includes(lot.section);
-  if (sub.type === "auction" && !isAuction) return false;
-  if (sub.type === "fixed"   &&  isAuction) return false;
+  // sub.type может быть строкой (старые подписки) или массивом (новые)
+  const types = Array.isArray(sub.type) ? sub.type : [sub.type || "auction"];
+  if (!types.includes("auction") && !types.includes("fixed")) return false;
+  if (!types.includes("auction") &&  isAuction) return false;
+  if (!types.includes("fixed")   && !isAuction) return false;
 
-  if (sub.type === "auction" && sub.categories?.length > 0) {
-    const url = lot.url || "";
-    if (!sub.categories.some(slug => url.includes(`/${slug}/`))) return false;
-  }
+  // Категории — ОТКЛЮЧЕНО, матчинг только по ключевым словам
+  // if (sub.type === "auction" && sub.categories?.length > 0) { ... }
 
   if (!matchRegion(sub.region, lot.location)) return false;
 
