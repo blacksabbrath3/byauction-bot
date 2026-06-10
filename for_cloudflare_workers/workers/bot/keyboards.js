@@ -47,13 +47,14 @@ export function inlineMultiSourcePick(selected) {
 
 // ── Подписка: тип лота (eauction) ────────────────────────────
 
-export function inlineTypeChoice() {
+export function inlineTypeChoice(selected = []) {
+  const a = selected.includes("auction") ? "✅" : "◻️";
+  const f = selected.includes("fixed")   ? "✅" : "◻️";
   return { inline_keyboard: [
-    [
-      { text: "🔨 Аукцион",            callback_data: "sub_t:auction" },
-      { text: "💰 Фиксированная цена", callback_data: "sub_t:fixed"   },
-    ],
-    [{ text: "❌ Отмена", callback_data: "sub_cancel" }],
+    [{ text: `${a} 🔨 Аукцион`,            callback_data: "sub_t:auction" }],
+    [{ text: `${f} 💰 Фиксированная цена`, callback_data: "sub_t:fixed"   }],
+    [{ text: "✔️ Готово",                   callback_data: "sub_t:done"    }],
+    [{ text: "❌ Отмена",                   callback_data: "sub_cancel"    }],
   ]};
 }
 

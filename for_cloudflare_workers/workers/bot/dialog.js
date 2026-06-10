@@ -6,12 +6,11 @@ import { sendMessage, editMessage, answerCallback } from "../../shared/telegram.
 import { sourceById } from "../../shared/sources.js";
 import {
   getSubs, saveSubs, getDialog, saveDialog, deleteDialog,
-  getCategories, getTorgigovCategories,
+  getCategories,
 } from "./kv.js";
 import {
   MAX_KEYWORD_GROUPS,
   inlineSourceChoice, inlineMultiSourcePick, inlineTypeChoice,
-  inlineCategories, inlineTorgigovCategories,
   inlineRegion, inlineOblasts,
   inlineWordTypeChoice, inlineKeywordsSkip, inlineMaxPriceSkip, inlineAddMoreGroups,
 } from "./keyboards.js";
@@ -96,14 +95,13 @@ export async function handleCallback(token, update, env) {
     }
 
     if (source === "torgigov") {
-      const tgCats = await getTorgigovCategories(env);
-      dialog.data.torgigovCategories = tgCats;
-      dialog.data.selectedTorgigovCategories = [];
-      dialog.step = "torgigov_categories";
+      // Категории torgigov — ОТКЛЮЧЕНО, подписка только по ключевым словам
+      dialog.data.categories = [];
+      dialog.step = "region";
       await saveDialog(env, userId, dialog);
       return editMessage(token, chatId, msgId,
-        `📋 <b>Новая подписка — torgi.gov.by</b>\n\nШаг 1 из 3 — Выберите категории (можно несколько):`,
-        { reply_markup: inlineTorgigovCategories(tgCats, []) });
+        `📋 <b>Новая подписка — torgi.gov.by</b>\n\nШаг 1 из 2 — Выберите регион:`,
+        { reply_markup: inlineRegion() });
     }
 
     if (source === "butb") {
@@ -187,97 +185,44 @@ export async function handleCallback(token, update, env) {
       { reply_markup: inlineKeywordsSkip() });
   }
 
-  // ── torgigov: категории ───────────────────────────────────────
-  if (data.startsWith("sub_tgc:") && dialog.step === "torgigov_categories") {
-    const slug   = data.slice(8);
-    const tgCats = dialog.data.torgigovCategories || [];
-    let selected = dialog.data.selectedTorgigovCategories || [];
+  // ── torgigov: категории — ОТКЛЮЧЕНО ──────────────────────────
+  // Шаг убран: подписка только по ключевым словам.
+  // if (data.startsWith("sub_tgc:") && dialog.step === "torgigov_categories") { ... }
 
-    if (slug === "all") {
-      selected = [];
-    } else if (slug === "done") {
-      dialog.data.categories = selected;
-      dialog.step = "region";
-      await saveDialog(env, userId, dialog);
-      return editMessage(token, chatId, msgId,
-        `📋 <b>Новая подписка — torgi.gov.by</b>\n\nШаг 2 из 3 — Регион:`,
-        { reply_markup: inlineRegion() });
-    } else {
-      selected = selected.includes(slug)
-        ? selected.filter(s => s !== slug)
-        : [...selected, slug];
-    }
-
-    dialog.data.selectedTorgigovCategories = selected;
-    await saveDialog(env, userId, dialog);
-    return editMessage(token, chatId, msgId,
-      `📋 <b>Новая подписка — torgi.gov.by</b>\n\nШаг 1 из 3 — Выберите категории (можно несколько):`,
-      { reply_markup: inlineTorgigovCategories(tgCats, selected) });
-  }
-
-  // ── eauction: тип лота ────────────────────────────────────────
+  // ── eauction: тип лота (чекбоксы, можно выбрать оба) ─────────
   if (data.startsWith("sub_t:") && dialog.step === "type") {
-    const type = data.slice(6);
-    dialog.data.type = type;
+    const val = data.slice(6);
 
-    if (type === "auction") {
-      const categories = await getCategories(env);
-      dialog.data.selectedCategories = [];
-      dialog.step = "categories";
-      await saveDialog(env, userId, dialog);
-      return editMessage(token, chatId, msgId,
-        categoryStepText([], categories),
-        { reply_markup: inlineCategories(categories, []) });
-    } else {
-      dialog.data.categories = [];
-      dialog.step = "region";
-      await saveDialog(env, userId, dialog);
-      return editMessage(token, chatId, msgId,
-        `📋 <b>Новая подписка — e-auction.by</b>\n\nШаг 2 из 3 — Выберите регион:`,
-        { reply_markup: inlineRegion() });
-    }
-  }
+    if (!dialog.data.selectedTypes) dialog.data.selectedTypes = [];
+    const sel = dialog.data.selectedTypes;
 
-  // ── eauction: категории ───────────────────────────────────────
-  if (data.startsWith("sub_c:") && dialog.step === "categories") {
-    const categories = await getCategories(env);
-    const slug = data.slice(6);
-
-    if (slug === "all") {
-      dialog.data.selectedCategories = [];
-      dialog.data.allCategories = true;
-      await saveDialog(env, userId, dialog);
-      return editMessage(token, chatId, msgId,
-        categoryStepText([], categories) + "\n\n☑️ <b>Выбраны все категории.</b> Нажмите «✔️ Готово».",
-        { reply_markup: inlineCategories(categories, []) });
-    }
-
-    if (slug === "done") {
-      const sel = dialog.data.selectedCategories || [];
-      if (!dialog.data.allCategories && sel.length === 0) {
-        await answerCallback(token, cb.id, "Выберите хотя бы одну категорию или нажмите «☑️ Все категории»");
+    if (val === "done") {
+      if (sel.length === 0) {
+        await answerCallback(token, cb.id, "Выберите хотя бы один вариант");
         return;
       }
-      dialog.data.categories = dialog.data.allCategories ? [] : sel;
-      delete dialog.data.selectedCategories;
-      delete dialog.data.allCategories;
-      dialog.step = "region";
+      dialog.data.type       = sel; // ["auction"] | ["fixed"] | ["auction","fixed"]
+      dialog.data.categories = []; // категории не собираем
+      dialog.step            = "region";
       await saveDialog(env, userId, dialog);
       return editMessage(token, chatId, msgId,
-        `📋 <b>Новая подписка — e-auction.by</b>\n\nШаг 2 из 3 — Выберите регион:`,
+        `📋 <b>Новая подписка — e-auction.by</b>\n\nШаг 2 из 2 — Выберите регион:`,
         { reply_markup: inlineRegion() });
     }
 
-    const sel = dialog.data.selectedCategories || [];
-    const idx = sel.indexOf(slug);
-    if (idx === -1) sel.push(slug); else sel.splice(idx, 1);
-    dialog.data.selectedCategories = sel;
-    dialog.data.allCategories = false;
+    // Тогл
+    const idx = sel.indexOf(val);
+    if (idx === -1) sel.push(val); else sel.splice(idx, 1);
+    dialog.data.selectedTypes = sel;
     await saveDialog(env, userId, dialog);
     return editMessage(token, chatId, msgId,
-      categoryStepText(sel, categories),
-      { reply_markup: inlineCategories(categories, sel) });
+      `📋 <b>Новая подписка — e-auction.by</b>\n\nШаг 1 из 2 — Что отслеживать? (можно выбрать оба):`,
+      { reply_markup: inlineTypeChoice(sel) });
   }
+
+  // ── eauction: категории — ОТКЛЮЧЕНО ──────────────────────────
+  // Шаг убран: подписка только по ключевым словам.
+  // if (data.startsWith("sub_c:") && dialog.step === "categories") { ... }
 
   // ── Регион (общий для eauction, butb, torgigov) ───────────────
   if (data === "sub_reg:all") {
@@ -330,7 +275,7 @@ export async function handleCallback(token, update, env) {
     }
     if (dialog.data.source === "torgigov") {
       dialog.data.max_price = 0;
-      const categories = await getTorgigovCategories(env);
+      const categories = await getCategories(env);
       return finishSubscription(token, chatId, userId, msgId, dialog, env, categories);
     }
     dialog.step = "max_price";
@@ -424,7 +369,7 @@ export async function handleCallback(token, update, env) {
     }
     if (src === "torgigov") {
       dialog.data.max_price = 0;
-      const categories = await getTorgigovCategories(env);
+      const categories = await getCategories(env);
       return finishSubscription(token, chatId, userId, msgId, dialog, env, categories);
     }
     dialog.step = "max_price";

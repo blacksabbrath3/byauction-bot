@@ -67,12 +67,12 @@ export function subSummary(sub, categories) {
   }
 
   if (sub.source === "torgigov") {
-    const lines = ["🏦 <b>torgi.gov.by</b> — государственная торговая площадка"];
-    lines.push(`<b>Категории:</b> ${categoryLabels(categories, sub.categories)}`);
-    lines.push(`<b>Регион:</b> ${regionLabel(sub.region)}`);
-    if (sub.keywords?.length > 0) lines.push(`<b>Ключевые слова:</b> ${formatKeywordGroups(sub.keywords)}`);
-    if (sub.max_price > 0)        lines.push(`<b>Макс. цена:</b> ${sub.max_price.toLocaleString("ru-RU")} BYN`);
-    return lines.join("\n");
+    return [
+      "🏦 <b>torgi.gov.by</b> — государственная торговая площадка",
+      `<b>Регион:</b> ${regionLabel(sub.region)}`,
+      kw,
+      ...(sub.max_price > 0 ? [`<b>Макс. цена:</b> ${sub.max_price.toLocaleString("ru-RU")} BYN`] : []),
+    ].join("\n");
   }
 
   if (sub.source === "butb") {
@@ -84,13 +84,16 @@ export function subSummary(sub, categories) {
   }
 
   // eauction (default)
-  const typeLabel = sub.type === "auction" ? "🔨 Аукцион" : "💰 Фиксированная цена";
-  const lines = [`🏛 <b>e-auction.by</b> — ${typeLabel}`];
-  if (sub.type === "auction") lines.push(`<b>Категории:</b> ${categoryLabels(categories, sub.categories)}`);
-  lines.push(`<b>Регион:</b> ${regionLabel(sub.region)}`);
-  if (sub.keywords?.length > 0) lines.push(`<b>Ключевые слова:</b> ${formatKeywordGroups(sub.keywords)}`);
-  if (sub.max_price > 0)        lines.push(`<b>Макс. цена:</b> ${sub.max_price.toLocaleString("ru-RU")} BYN`);
-  return lines.join("\n");
+  const types = Array.isArray(sub.type) ? sub.type : [sub.type || "auction"];
+  const typeLabel = types.length >= 2
+    ? "🔨 Аукцион + 💰 Фиксированная цена"
+    : types[0] === "fixed" ? "💰 Фиксированная цена" : "🔨 Аукцион";
+  return [
+    `🏛 <b>e-auction.by</b> — ${typeLabel}`,
+    `<b>Регион:</b> ${regionLabel(sub.region)}`,
+    kw,
+    ...(sub.max_price > 0 ? [`<b>Макс. цена:</b> ${sub.max_price.toLocaleString("ru-RU")} BYN`] : []),
+  ].join("\n");
 }
 
 // ── Тексты шагов ─────────────────────────────────────────────
