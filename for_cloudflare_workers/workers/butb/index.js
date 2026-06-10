@@ -204,16 +204,15 @@ async function handleSendNotifications(body, env) {
     ].join(" ").toLowerCase();
 
     const lines = [];
-    lines.push(`<b>${escapeHtml(lot.title || "Без названия")}</b>`);
+    lines.push(`🏗 <a href="${escapeHtml(lot.url)}">${escapeHtml(lot.title || "Без названия")}</a>`);
     if (lot.status)     lines.push(`Статус: ${escapeHtml(lot.status)}`);
-    if (lot.lot_num)    lines.push(`${escapeHtml(lot.lot_num)}`);
-    if (lot.price)      lines.push(`💰 <b>${escapeHtml(lot.price)}</b>`);
+    if (lot.lot_num)    lines.push(escapeHtml(lot.lot_num));
+    if (lot.price)      lines.push(`💰 ${escapeHtml(lot.price)}`);
     if (lot.deposit)    lines.push(`Задаток: ${escapeHtml(lot.deposit)}`);
     if (lot.location)   lines.push(`📍 ${escapeHtml(lot.location)}`);
     if (lot.organizer)  lines.push(`🏢 ${escapeHtml(lot.organizer)}`);
     if (lot.deadline)   lines.push(`⏰ Приём заявлений до: ${escapeHtml(lot.deadline)}`);
     if (lot.trade_date) lines.push(`📅 Торги: ${escapeHtml(lot.trade_date)}`);
-    lines.push(`\n🔗 <a href="${escapeHtml(lot.url)}">Открыть лот</a>`);
 
     return {
       text:    lines.join("\n"),
