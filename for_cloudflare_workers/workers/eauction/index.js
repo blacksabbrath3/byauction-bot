@@ -11,11 +11,11 @@ import { matchKeywords }                        from "../../shared/matchKeyword.
 import { sendNotifications }                    from "../../shared/subscribers.js";
 import { tgSend }                               from "../../shared/telegram.js";
 import { escapeHtml, jsonResponse, checkAuth }  from "../../shared/format.js";
-import { matchRegion }                         from "../../shared/region.js";
+import { matchRegion }                          from "../../shared/region.js";
 
 // ── Константы ─────────────────────────────────────────────────
 
-const AUCTION_SECTIONS = ["auction", "gos"];        // commerce убрали — не показываем отдельно
+const AUCTION_SECTIONS = ["auction", "gos"];
 const FIXED_SECTIONS   = ["shop", "showcase", "commerce"];
 const ALL_SECTIONS     = [...AUCTION_SECTIONS, ...FIXED_SECTIONS];
 
@@ -56,14 +56,13 @@ function matchLot(lot, sub) {
   }
 
   const isAuction = AUCTION_SECTIONS.includes(lot.section);
-  // sub.type может быть строкой (старые подписки) или массивом (новые)
   const types = Array.isArray(sub.type) ? sub.type : [sub.type || "auction"];
   if (!types.includes("auction") && !types.includes("fixed")) return false;
   if (!types.includes("auction") &&  isAuction) return false;
   if (!types.includes("fixed")   && !isAuction) return false;
 
-  // Категории — ОТКЛЮЧЕНО, матчинг только по ключевым словам
-  // if (sub.type === "auction" && sub.categories?.length > 0) { ... }
+  // Категории — ОТКЛЮЧЕНО
+  // if (sub.categories?.length > 0) { ... }
 
   if (!matchRegion(sub.region, lot.location)) return false;
 
@@ -109,15 +108,27 @@ async function handleGetCategories(env) {
 }
 
 async function handleGetStatus(env) {
-  const [last_full_reset, snapshot_ts] = await Promise.all([
+  const [last_full_reset, snapshot_ts, last_daily_run] = await Promise.all([
     env.EAUCTION_STORAGE.get("last_full_reset"),
     env.EAUCTION_STORAGE.get("snapshot_timestamp"),
+    env.EAUCTION_STORAGE.get("last_daily_run"),
   ]);
   return jsonResponse({
     last_full_reset,
     snapshot_ts,
-    current_time: new Date().toLocaleString("ru-RU", { timeZone: "Europe/Moscow" }),
+    last_daily_run: last_daily_run ? JSON.parse(last_daily_run) : null,
+    current_time: new Date().toISOString(),
   });
+}
+
+async function handleSaveDailyRun(body, env) {
+  const ts = new Date().toISOString();
+  await env.EAUCTION_STORAGE.put("last_daily_run", JSON.stringify({
+    ts,
+    date:       body.date       ?? ts.slice(0, 10),
+    lots_found: body.lots_found ?? 0,
+  }));
+  return jsonResponse({ ok: true, ts });
 }
 
 async function handleSnapshot(body, env) {
@@ -200,6 +211,7 @@ export default {
       if (method === "POST" && path === "/save-categories")    return handleSaveCategories(body, env);
       if (method === "POST" && path === "/add-lots")           return handleAddLots(body, env);
       if (method === "POST" && path === "/save-daily-lots")    return handleSaveDailyLots(body, env);
+      if (method === "POST" && path === "/save-daily-run")     return handleSaveDailyRun(body, env);
       if (method === "POST" && path === "/send-notifications") return handleSendNotifications(body, env);
 
       return new Response("Not Found", { status: 404 });
