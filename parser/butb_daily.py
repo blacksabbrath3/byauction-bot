@@ -315,6 +315,17 @@ def main() -> None:
     else:
         print("\n[4] Новых лотов нет — уведомления не отправляются.")
 
+    # Сохраняем дату последнего запуска в любом случае
+    print("\n[→] Сохраняю дату последнего запуска…")
+    try:
+        r = _post("save-daily-run", {
+            "date":       date.today().isoformat(),
+            "lots_found": len(new_lots),
+        })
+        print(f"  [✓] /save-daily-run: {r}")
+    except Exception as e:
+        print(f"  [!] /save-daily-run: {e}")
+
     print(f"\n{'=' * 60}")
     print("  Готово.")
     print(f"{'=' * 60}")
@@ -328,4 +339,3 @@ if __name__ == "__main__":
         print(f"\n[✗] КРИТИЧЕСКАЯ ОШИБКА: {msg}")
         send_alert(msg)
         sys.exit(1)
-      
