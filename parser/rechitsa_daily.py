@@ -233,6 +233,16 @@ def main() -> None:
     # 6. Рассылаем уведомления (Worker сам проверит есть ли пачка за сегодня)
     send_notifications(today)
 
+    # 7. Сохраняем дату последнего запуска
+    try:
+        r = api_post("/save-daily-run", {
+            "date":       today,
+            "lots_found": len(new_raw) if new_raw else 0,
+        })
+        log.info(f"/save-daily-run: {r}")
+    except Exception as e:
+        log.warning(f"/save-daily-run failed: {e}")
+
     log.info("=== rechitsa_daily.py завершён ===")
 
 

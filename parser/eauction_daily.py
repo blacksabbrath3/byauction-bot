@@ -369,6 +369,18 @@ def main() -> None:
     else:
         print("\n[6] Новых лотов нет — уведомления не отправляются.")
 
+    # Сохраняем дату последнего запуска в любом случае
+    try:
+        r = requests.post(
+            f"{WORKER_URL}/save-daily-run",
+            json={"date": date.today().isoformat(), "lots_found": total_new},
+            headers={"X-API-Key": cfg.PARSER_SECRET, "Content-Type": "application/json"},
+            timeout=30,
+        )
+        print(f"\n[✓] /save-daily-run: {r.json()}")
+    except Exception as e:
+        print(f"\n[!] /save-daily-run: {e}")
+
     print(f"\n{'=' * 60}")
     print("  Готово.")
     print(f"{'=' * 60}")
