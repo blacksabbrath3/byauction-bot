@@ -33,6 +33,24 @@ function formatArticleMessage(article) {
 
 // ── Handlers ──────────────────────────────────────────────────
 
+async function handleGetStatus(env) {
+  const raw = await env.RECHITSA_STORAGE.get("last_daily_run");
+  return jsonResponse({
+    last_daily_run: raw ? JSON.parse(raw) : null,
+    current_time:   new Date().toISOString(),
+  });
+}
+
+async function handleSaveDailyRun(body, env) {
+  const ts = new Date().toISOString();
+  await env.RECHITSA_STORAGE.put("last_daily_run", JSON.stringify({
+    ts,
+    date:       body.date       ?? ts.slice(0, 10),
+    lots_found: body.lots_found ?? 0,
+  }));
+  return jsonResponse({ ok: true, ts });
+}
+
 async function handleGetKnownArticles(env) {
   const raw = await env.RECHITSA_STORAGE.get("known_articles");
   return jsonResponse({ articles: raw ? JSON.parse(raw) : [] });
@@ -91,13 +109,15 @@ export default {
       const path   = url.pathname;
       const method = request.method;
 
-      if (method === "GET" && path === "/known-articles") return handleGetKnownArticles(env);
+      if (method === "GET"  && path === "/status")             return handleGetStatus(env);
+      if (method === "GET"  && path === "/known-articles")      return handleGetKnownArticles(env);
 
       const body = await request.json().catch(() => null);
       if (!body) return new Response("Bad JSON", { status: 400 });
 
       if (method === "POST" && path === "/add-articles")        return handleAddArticles(body, env);
       if (method === "POST" && path === "/save-daily-articles") return handleSaveDailyArticles(body, env);
+      if (method === "POST" && path === "/save-daily-run")      return handleSaveDailyRun(body, env);
       if (method === "POST" && path === "/send-notifications")  return handleSendNotifications(body, env);
 
       return new Response("Not Found", { status: 404 });
