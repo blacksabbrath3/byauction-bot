@@ -5,6 +5,8 @@
  * и во всех воркерах-парсерах (eauction, torgigov, butb, ...).
  */
 
+import { matchKeywords } from "./matchKeyword.js";
+
 export const REGIONS = [
   "Брестская",
   "Витебская",
@@ -28,16 +30,23 @@ export function regionLabel(r) {
 /**
  * Проверяет подходит ли locationText под регион подписки.
  *
- * @param {string|string[]|"all"|"keywords"} region  - sub.region
- * @param {string} locationText                       - lot.location (или searchText целиком)
+ * @param {string|string[]|"all"|"keywords"} region        - sub.region
+ * @param {string} locationText                             - lot.location (или searchText целиком)
+ * @param {Array}  [regionKeywords]                         - sub.regionKeywords, группы токенов
+ *                                                             (используются только если region === "keywords")
  * @returns {boolean}
- *
- * Если region === "keywords" — регион проверяется через ключевые слова подписки,
- * matchRegion возвращает true (не блокирует), реальная проверка в matchKeywords.
  */
-export function matchRegion(region, locationText) {
-  if (!region || region === "all" || region === "keywords") return true;
+export function matchRegion(region, locationText, regionKeywords) {
+  if (!region || region === "all") return true;
+
+  if (region === "keywords") {
+    // Если отдельные региональные ключевые слова не заданы — не блокируем
+    // (старые подписки, где регион проверялся через общие keywords)
+    if (!regionKeywords || regionKeywords.length === 0) return true;
+    return matchKeywords((locationText || "").toLowerCase(), regionKeywords);
+  }
+
   const regions = Array.isArray(region) ? region : [region];
-  const loc     = (locationText || "").toLowerCase();
+  const loc      = (locationText || "").toLowerCase();
   return regions.some(r => loc.includes(r.toLowerCase()));
 }
