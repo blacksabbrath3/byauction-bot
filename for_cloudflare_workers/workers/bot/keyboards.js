@@ -124,6 +124,11 @@ export function inlineOblasts() {
  */
 export function inlineWordTypeChoice(flatTokens, wordTypes, groupIndex) {
   const rows = [];
+
+  // Быстрый путь — сразу принять группу с настройками "частичное" по умолчанию
+  rows.push([{ text: "✅ Использовать как есть", callback_data: `sub_wt_done|${groupIndex}` }]);
+  rows.push([{ text: "⚙️ Настроить точнее ↓", callback_data: "noop" }]);
+
   let lastPhrase = null;
 
   flatTokens.forEach((token, idx) => {
@@ -143,7 +148,7 @@ export function inlineWordTypeChoice(flatTokens, wordTypes, groupIndex) {
     ]);
   });
 
-  rows.push([{ text: "⚙️ Расширенный поиск", callback_data: `sub_custom|${groupIndex}` }]);
+  rows.push([{ text: "⚙️ Расширенный поиск (regex-подобный)", callback_data: `sub_custom|${groupIndex}` }]);
   rows.push([
     { text: "✅ Готово", callback_data: `sub_wt_done|${groupIndex}` },
     { text: "❌ Отмена", callback_data: "sub_cancel" },

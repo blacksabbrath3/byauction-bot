@@ -24,6 +24,27 @@ import { parseGroupInput, buildFlatTokens } from "./keywords.js";
 
 const MAX_SUBS = 10;
 
+// ── Активные группы ключевых слов (регион / лот) ──────────────
+// dialog.data.keywordPhase === "region" → работаем с regionKeywordGroups
+// иначе (по умолчанию "lot")            → работаем с keywordGroups
+
+function activeGroups(dialog) {
+  return dialog.data.keywordPhase === "region"
+    ? (dialog.data.regionKeywordGroups ||= [])
+    : (dialog.data.keywordGroups ||= []);
+}
+
+/** После завершения ввода региональных ключевых слов переходим к лот-ключевым. */
+async function proceedToLotKeywords(token, chatId, msgId, userId, dialog, env) {
+  dialog.data.keywordPhase = "lot";
+  dialog.data.keywordGroups = [];
+  dialog.step = "keywords_input";
+  await saveDialog(env, userId, dialog);
+  return editMessage(token, chatId, msgId,
+    keywordsPromptText(dialog.data.source, "lot") + currentGroupsSummary([]),
+    { reply_markup: inlineKeywordsSkip() });
+}
+
 // ── Начало диалога ────────────────────────────────────────────
 
 export async function startSubscribeDialog(token, chatId, userId, env) {
@@ -157,13 +178,22 @@ export async function handleCallback(token, update, env) {
 
   // ── Мультиподписка: регион ────────────────────────────────────
   if (dialog.step === "multi_region") {
-    if (data === "sub_reg:all" || data === "sub_reg:words") {
-      dialog.data.region = data === "sub_reg:all" ? "all" : "keywords";
+    if (data === "sub_reg:all") {
+      dialog.data.region = "all";
       dialog.step = "keywords_input";
       dialog.data.keywordGroups = [];
       await saveDialog(env, userId, dialog);
       return editMessage(token, chatId, msgId,
-        keywordsPromptText("multi") + currentGroupsSummary([]),
+        keywordsPromptText("multi", "lot") + currentGroupsSummary([]),
+        { reply_markup: inlineKeywordsSkip() });
+    }
+    if (data === "sub_reg:words") {
+      dialog.data.region = "keywords";
+      dialog.step = "region_keywords_input";
+      dialog.data.regionKeywordGroups = []; dialog.data.keywordPhase = "region";
+      await saveDialog(env, userId, dialog);
+      return editMessage(token, chatId, msgId,
+        keywordsPromptText("multi", "region") + currentGroupsSummary([]),
         { reply_markup: inlineKeywordsSkip() });
     }
     if (data === "sub_reg:oblast") {
@@ -181,7 +211,7 @@ export async function handleCallback(token, update, env) {
     dialog.data.keywordGroups = [];
     await saveDialog(env, userId, dialog);
     return editMessage(token, chatId, msgId,
-      keywordsPromptText("multi") + currentGroupsSummary([]),
+      keywordsPromptText("multi", "lot") + currentGroupsSummary([]),
       { reply_markup: inlineKeywordsSkip() });
   }
 
@@ -231,7 +261,7 @@ export async function handleCallback(token, update, env) {
     dialog.data.keywordGroups = [];
     await saveDialog(env, userId, dialog);
     return editMessage(token, chatId, msgId,
-      keywordsPromptText(dialog.data.source) + currentGroupsSummary([]),
+      keywordsPromptText(dialog.data.source, "lot") + currentGroupsSummary([]),
       { reply_markup: inlineKeywordsSkip() });
   }
 
@@ -251,23 +281,28 @@ export async function handleCallback(token, update, env) {
     dialog.data.keywordGroups = [];
     await saveDialog(env, userId, dialog);
     return editMessage(token, chatId, msgId,
-      keywordsPromptText(dialog.data.source) + currentGroupsSummary([]),
+      keywordsPromptText(dialog.data.source, "lot") + currentGroupsSummary([]),
       { reply_markup: inlineKeywordsSkip() });
   }
 
   if (data === "sub_reg:words") {
     dialog.data.region = "keywords";
-    dialog.step = "keywords_input";
-    dialog.data.keywordGroups = [];
+    dialog.step = "region_keywords_input";
+    dialog.data.regionKeywordGroups = []; dialog.data.keywordPhase = "region";
     await saveDialog(env, userId, dialog);
     return editMessage(token, chatId, msgId,
-      keywordsPromptText(dialog.data.source) + currentGroupsSummary([]),
+      keywordsPromptText(dialog.data.source, "region") + currentGroupsSummary([]),
       { reply_markup: inlineKeywordsSkip() });
   }
 
   // ── Ключевые слова: пропустить ────────────────────────────────
   if (data === "sub_kw:skip") {
-    dialog.data.keywords = [];
+    if (dialog.step === "region_keywords_input") {
+      dialog.data.regionKeywordGroups = [];
+      return proceedToLotKeywords(token, chatId, msgId, userId, dialog, env);
+    }
+
+    dialog.data.keywords = dialog.data.keywordGroups || [];
     if (dialog.data.source === "rechitsa" || dialog.data.source === "butb" || dialog.data.source === "multi") {
       dialog.data.max_price = 0;
       const categories = await getCategories(env);
@@ -296,8 +331,9 @@ export async function handleCallback(token, update, env) {
     const [, gIdx, tIdx, type] = data.split("|");
     const groupIdx = parseInt(gIdx);
     const tokenIdx = parseInt(tIdx);
+    const groups   = activeGroups(dialog);
 
-    if (!dialog.data.keywordGroups?.[groupIdx]) {
+    if (!groups[groupIdx]) {
       return answerCallback(token, cb.id, "Ошибка: группа не найдена");
     }
     const flatToken = dialog.data.currentFlatTokens?.[tokenIdx];
@@ -305,7 +341,7 @@ export async function handleCallback(token, update, env) {
       return answerCallback(token, cb.id, "Ошибка: токен не найден");
     }
 
-    const group     = dialog.data.keywordGroups[groupIdx];
+    const group     = groups[groupIdx];
     const groupItem = group.find(w => w.key === flatToken.key);
     if (!groupItem) return answerCallback(token, cb.id, "Ошибка: слово не найдено");
 
@@ -325,11 +361,12 @@ export async function handleCallback(token, update, env) {
   // ── Подтвердить типы слов ─────────────────────────────────────
   if (data.startsWith("sub_wt_done|")) {
     const groupIdx = parseInt(data.split("|")[1]);
-    if (!dialog.data.keywordGroups?.[groupIdx]) {
+    const groups   = activeGroups(dialog);
+    if (!groups[groupIdx]) {
       return answerCallback(token, cb.id, "Ошибка: группа не найдена");
     }
 
-    const group = dialog.data.keywordGroups[groupIdx];
+    const group = groups[groupIdx];
     group.forEach(w => { if (!w.type) w.type = "partial"; });
 
     delete dialog.data.currentFlatTokens;
@@ -339,27 +376,32 @@ export async function handleCallback(token, update, env) {
     return editMessage(token, chatId, msgId,
       `📝 <b>Группа ${groupIdx + 1} сохранена</b>\n\n` +
       groupSummaryText(group) +
-      currentGroupsSummary(dialog.data.keywordGroups),
-      { reply_markup: inlineAddMoreGroups(dialog.data.keywordGroups.length) });
+      currentGroupsSummary(groups),
+      { reply_markup: inlineAddMoreGroups(groups.length) });
   }
 
   // ── Добавить ещё группу ───────────────────────────────────────
   if (data === "sub_kg:add") {
-    if ((dialog.data.keywordGroups?.length || 0) >= MAX_KEYWORD_GROUPS) {
+    const groups = activeGroups(dialog);
+    if (groups.length >= MAX_KEYWORD_GROUPS) {
       return answerCallback(token, cb.id, `Максимум ${MAX_KEYWORD_GROUPS} групп`);
     }
-    dialog.step = "keywords_input";
+    dialog.step = dialog.data.keywordPhase === "region" ? "region_keywords_input" : "keywords_input";
     await saveDialog(env, userId, dialog);
     return editMessage(token, chatId, msgId,
-      `📝 Введите слова для группы ${dialog.data.keywordGroups.length + 1}:\n\n` +
+      `📝 Введите слова для группы ${groups.length + 1}:\n\n` +
       `<b>Пример:</b> <code>Минск, Советская, авто</code>\n\n` +
       `Слова разделяются запятой — все должны встретиться в тексте.` +
-      currentGroupsSummary(dialog.data.keywordGroups),
+      currentGroupsSummary(groups),
       { reply_markup: { inline_keyboard: [[{ text: "❌ Отмена", callback_data: "sub_cancel" }]] } });
   }
 
   // ── Завершить ввод групп ──────────────────────────────────────
   if (data === "sub_kg:done") {
+    if (dialog.data.keywordPhase === "region") {
+      return proceedToLotKeywords(token, chatId, msgId, userId, dialog, env);
+    }
+
     dialog.data.keywords = dialog.data.keywordGroups || [];
     const src = dialog.data.source;
     if (src === "rechitsa" || src === "butb" || src === "multi") {
@@ -394,13 +436,14 @@ export async function handleCallback(token, update, env) {
 
   // ── Назад к типам слов ────────────────────────────────────────
   if (data.startsWith("sub_back_to_types|")) {
-    const gIdx  = parseInt(data.split("|")[1]);
-    dialog.step = "keywords_select_types";
-    if (!dialog.data.keywordGroups?.[gIdx]) {
+    const gIdx   = parseInt(data.split("|")[1]);
+    const groups = activeGroups(dialog);
+    dialog.step  = dialog.data.keywordPhase === "region" ? "region_keywords_select_types" : "keywords_select_types";
+    if (!groups[gIdx]) {
       return answerCallback(token, cb.id, "Ошибка: группа не найдена");
     }
 
-    const group = dialog.data.keywordGroups[gIdx];
+    const group = groups[gIdx];
     dialog.data.currentFlatTokens = group.map(w => ({
       key:         w.key,
       displayWord: w.word,
@@ -427,20 +470,21 @@ export async function handleTextInDialog(token, chatId, userId, text, env) {
   if (!dialog) return null;
 
   if (dialog.step === "custom_pattern") {
-    const gIdx = dialog.data.customGroupIndex;
-    if (!dialog.data.keywordGroups?.[gIdx]) {
+    const gIdx   = dialog.data.customGroupIndex;
+    const groups = activeGroups(dialog);
+    if (!groups[gIdx]) {
       return sendMessage(token, chatId, "⚠️ Ошибка: группа не найдена.");
     }
-    const group = dialog.data.keywordGroups[gIdx];
+    const group = groups[gIdx];
     group.forEach(w => { w.type = "custom"; w.pattern = text; });
-    dialog.step = "keywords_select_types";
+    dialog.step = dialog.data.keywordPhase === "region" ? "region_keywords_select_types" : "keywords_select_types";
     await saveDialog(env, userId, dialog);
     return sendMessage(token, chatId,
       `✅ Шаблон "${text}" применён к группе ${gIdx + 1}\n\n` + groupSummaryText(group),
-      { reply_markup: inlineAddMoreGroups(dialog.data.keywordGroups.length) });
+      { reply_markup: inlineAddMoreGroups(groups.length) });
   }
 
-  if (dialog.step === "keywords_input") {
+  if (dialog.step === "keywords_input" || dialog.step === "region_keywords_input") {
     const parsed = parseGroupInput(text);
     if (parsed.length === 0) {
       return sendMessage(token, chatId, "⚠️ Введите хотя бы одно слово.");
@@ -455,10 +499,10 @@ export async function handleTextInDialog(token, chatId, userId, text, env) {
       phraseGroup: token.isPhrase ? token.fullPhrase : null,
     }));
 
-    if (!dialog.data.keywordGroups) dialog.data.keywordGroups = [];
-    dialog.data.keywordGroups.push(group);
-    const groupIndex = dialog.data.keywordGroups.length - 1;
-    dialog.step = "keywords_select_types";
+    const groups = activeGroups(dialog);
+    groups.push(group);
+    const groupIndex = groups.length - 1;
+    dialog.step = dialog.data.keywordPhase === "region" ? "region_keywords_select_types" : "keywords_select_types";
     dialog.data.currentParsedParts = parsed;
     dialog.data.currentFlatTokens  = flatTokensNew;
 
@@ -501,23 +545,27 @@ export async function finishSubscription(token, chatId, userId, msgId, dialog, e
 
   let sub;
   const src = dialog.data.source;
+  const regionKeywords = dialog.data.regionKeywordGroups || [];
 
   if (src === "multi") {
     sub = { id: shortUUID(), source: "multi", sources: dialog.data.multiSources || [],
-            region: dialog.data.region || "all", keywords: dialog.data.keywordGroups || [] };
+            region: dialog.data.region || "all", regionKeywords,
+            keywords: dialog.data.keywordGroups || [] };
   } else if (src === "rechitsa") {
     sub = { id: shortUUID(), source: "rechitsa",
             keywords: dialog.data.keywordGroups || [] };
   } else if (src === "torgigov") {
     sub = { id: shortUUID(), source: "torgigov", categories: dialog.data.categories || [],
-            region: dialog.data.region || "all", keywords: dialog.data.keywordGroups || [],
+            region: dialog.data.region || "all", regionKeywords,
+            keywords: dialog.data.keywordGroups || [],
             max_price: dialog.data.max_price || 0 };
   } else if (src === "butb") {
-    sub = { id: shortUUID(), source: "butb", region: dialog.data.region || "all",
+    sub = { id: shortUUID(), source: "butb", region: dialog.data.region || "all", regionKeywords,
             keywords: dialog.data.keywordGroups || [] };
   } else {
     sub = { id: shortUUID(), source: "eauction", type: dialog.data.type || "auction",
             categories: dialog.data.categories || [], region: dialog.data.region || "keywords",
+            regionKeywords,
             keywords: dialog.data.keywordGroups || [], max_price: dialog.data.max_price || 0 };
   }
 

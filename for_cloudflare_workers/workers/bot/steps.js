@@ -46,6 +46,13 @@ export function formatKeywordGroups(groups) {
 
 // ── Сводка подписки ───────────────────────────────────────────
 
+function regionLine(sub) {
+  if (sub.region === "keywords" && sub.regionKeywords?.length > 0) {
+    return `<b>Регион:</b> по словам — ${formatKeywordGroups(sub.regionKeywords)}`;
+  }
+  return `<b>Регион:</b> ${regionLabel(sub.region)}`;
+}
+
 export function subSummary(sub, categories) {
   const kw = sub.keywords?.length > 0
     ? `<b>Ключевые слова:</b> ${formatKeywordGroups(sub.keywords)}`
@@ -57,7 +64,7 @@ export function subSummary(sub, categories) {
       .join(", ");
     return [
       `🔀 <b>Несколько сайтов:</b> ${srcLabels}`,
-      `<b>Регион:</b> ${regionLabel(sub.region)}`,
+      regionLine(sub),
       kw,
     ].join("\n");
   }
@@ -69,7 +76,7 @@ export function subSummary(sub, categories) {
   if (sub.source === "torgigov") {
     return [
       "🏦 <b>torgi.gov.by</b> — государственная торговая площадка",
-      `<b>Регион:</b> ${regionLabel(sub.region)}`,
+      regionLine(sub),
       kw,
       ...(sub.max_price > 0 ? [`<b>Макс. цена:</b> ${sub.max_price.toLocaleString("ru-RU")} BYN`] : []),
     ].join("\n");
@@ -78,7 +85,7 @@ export function subSummary(sub, categories) {
   if (sub.source === "butb") {
     return [
       "🏗 <b>БУТБ</b> — имущество (et.butb.by)",
-      `<b>Регион:</b> ${regionLabel(sub.region)}`,
+      regionLine(sub),
       kw,
     ].join("\n");
   }
@@ -90,7 +97,7 @@ export function subSummary(sub, categories) {
     : types[0] === "fixed" ? "💰 Фиксированная цена" : "🔨 Аукцион";
   return [
     `🏛 <b>e-auction.by</b> — ${typeLabel}`,
-    `<b>Регион:</b> ${regionLabel(sub.region)}`,
+    regionLine(sub),
     kw,
     ...(sub.max_price > 0 ? [`<b>Макс. цена:</b> ${sub.max_price.toLocaleString("ru-RU")} BYN`] : []),
   ].join("\n");
@@ -126,15 +133,33 @@ export function maxPricePromptText(source) {
   );
 }
 
-export function keywordsPromptText(source) {
+export function keywordsPromptText(source, target = "lot") {
+  if (target === "region") {
+    return (
+      `${sourceHeader(source)}\n\n` +
+      `Шаг 2 — <b>Регион поиска</b> по ключевым словам:\n\n` +
+      `Введите слова или фразы через <b>запятую</b>, описывающие нужную местность ` +
+      `(город, район, улицу). Лот подходит, если хотя бы одна группа слов встречается ` +
+      `в его адресе/описании.\n\n` +
+      `Для поиска целой фразы — разделяйте слова фразы <b>пробелом</b>.\n\n` +
+      `<b>Пример:</b> <code>Гомель, Гомельская область, Жлобин</code>\n` +
+      `<i>Подойдут лоты из Гомеля, Гомельской области или Жлобина.</i>\n\n` +
+      `Или нажмите «Пропустить» — регион не будет ограничен.`
+    );
+  }
+
+  const stepLabel = (source === "butb" || source === "multi" || source === "torgigov" || source === "eauction")
+    ? "Шаг 3 — " : "";
+
   return (
     `${sourceHeader(source)}\n\n` +
-    `<b>Ключевые слова</b> (необязательно):\n\n` +
+    `${stepLabel}<b>Ключевые слова для поиска лота</b> (необязательно):\n\n` +
     `Введите слова или фразы через <b>запятую</b>. Все слова из группы должны встретиться в тексте лота (в любом месте, но обязательно все).\n\n` +
     `Для поиска целой фразы — разделяйте слова фразы <b>пробелом</b>.\n\n` +
     `<b>Пример:</b> <code>Гомел, улица Советская, авто</code>\n` +
     `<i>Бот найдёт лоты, где есть "Гомел", фраза "улица Советская" и "авто".</i>\n\n` +
-    `После ввода вы сможете выбрать тип совпадения для каждого слова.\n\n` +
+    `После ввода вы сможете выбрать тип совпадения для каждого слова — ` +
+    `или просто нажать «✅ Использовать как есть».\n\n` +
     `Или нажмите «Пропустить» — будут приходить все новые публикации.`
   );
 }
