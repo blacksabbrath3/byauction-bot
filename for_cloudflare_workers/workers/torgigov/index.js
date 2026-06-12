@@ -163,7 +163,7 @@ function matchLot(lot, sub) {
   }
 
   const lotLocationText = resolveRegion(lot.region) + " " + (lot.location || "");
-  if (!matchRegion(sub.region, lotLocationText)) return false;
+  if (!matchRegion(sub.region, lotLocationText, sub.regionKeywords)) return false;
 
   const text = [lot.title, lot.category, lot.location].join(" ").toLowerCase();
   if (!matchKeywords(text, sub.keywords)) return false;
