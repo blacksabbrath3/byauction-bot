@@ -64,7 +64,7 @@ function matchLot(lot, sub) {
   // Категории — ОТКЛЮЧЕНО
   // if (sub.categories?.length > 0) { ... }
 
-  if (!matchRegion(sub.region, lot.location)) return false;
+  if (!matchRegion(sub.region, lot.location, sub.regionKeywords)) return false;
 
   const text = [lot.title, lot.description, lot.location].join(" ").toLowerCase();
   if (!matchKeywords(text, sub.keywords)) return false;
