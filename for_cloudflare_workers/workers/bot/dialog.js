@@ -297,18 +297,19 @@ export async function handleCallback(token, update, env) {
 
   // ── Ключевые слова: пропустить ────────────────────────────────
   if (data === "sub_kw:skip") {
-    if (dialog.step === "region_keywords_input") {
+    if (dialog.data.keywordPhase === "region") {
       dialog.data.regionKeywordGroups = [];
       return proceedToLotKeywords(token, chatId, msgId, userId, dialog, env);
     }
 
+    // Фаза "lot" — завершаем подписку
     dialog.data.keywords = dialog.data.keywordGroups || [];
-    if (dialog.data.source === "rechitsa" || dialog.data.source === "butb" || dialog.data.source === "multi") {
+    if (dialog.data.source === "rechitsa") {
       dialog.data.max_price = 0;
       const categories = await getCategories(env);
       return finishSubscription(token, chatId, userId, msgId, dialog, env, categories);
     }
-    if (dialog.data.source === "torgigov") {
+    if (dialog.data.source === "butb" || dialog.data.source === "multi" || dialog.data.source === "torgigov") {
       dialog.data.max_price = 0;
       const categories = await getCategories(env);
       return finishSubscription(token, chatId, userId, msgId, dialog, env, categories);
