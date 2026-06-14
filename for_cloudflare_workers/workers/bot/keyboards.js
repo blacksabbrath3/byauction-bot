@@ -2,7 +2,7 @@
  * bot/keyboards.js — Все inline-клавиатуры и главное меню бота.
  */
 
-import { REGIONS } from "../../shared/region.js";
+import { REGIONS, DISTRICTS } from "../../shared/region.js";
 import { SOURCES  } from "../../shared/sources.js";
 
 export const MAX_KEYWORD_GROUPS = 15;
@@ -112,6 +112,35 @@ export function inlineOblasts() {
   }
   rows.push([{ text: "❌ Отмена", callback_data: "sub_cancel" }]);
   return { inline_keyboard: rows };
+}
+
+/** Список районов выбранной области с чекбоксами. */
+export function inlineDistricts(oblast, selected = []) {
+  const districts = DISTRICTS[oblast] || [];
+  const rows = [];
+  for (let i = 0; i < districts.length; i += 2) {
+    const row = [];
+    for (const d of districts.slice(i, i + 2)) {
+      const checked = selected.includes(d) ? "✅ " : "";
+      row.push({ text: `${checked}${d}`, callback_data: `sub_dst:${d}` });
+    }
+    rows.push(row);
+  }
+  rows.push([
+    { text: "✔️ Готово",          callback_data: "sub_dst:done"  },
+    { text: "☑️ Все районы",      callback_data: "sub_dst:all"   },
+  ]);
+  rows.push([{ text: "❌ Отмена", callback_data: "sub_cancel" }]);
+  return { inline_keyboard: rows };
+}
+
+/** После выбора районов: завершить или уточнить сельсовет. */
+export function inlineAfterDistrict() {
+  return { inline_keyboard: [
+    [{ text: "✅ Завершить выбор",      callback_data: "sub_council:skip" }],
+    [{ text: "🏘 Уточнить сельсовет",  callback_data: "sub_council:enter" }],
+    [{ text: "❌ Отмена",              callback_data: "sub_cancel" }],
+  ]};
 }
 
 // ── Подписка: ключевые слова ──────────────────────────────────

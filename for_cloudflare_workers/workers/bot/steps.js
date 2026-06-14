@@ -50,7 +50,14 @@ function regionLine(sub) {
   if (sub.region === "keywords" && sub.regionKeywords?.length > 0) {
     return `<b>Регион:</b> по словам — ${formatKeywordGroups(sub.regionKeywords)}`;
   }
-  return `<b>Регион:</b> ${regionLabel(sub.region)}`;
+  let line = `<b>Регион:</b> ${regionLabel(sub.region)}`;
+  if (sub.regionDistricts?.length > 0) {
+    line += ` → ${sub.regionDistricts.join(", ")}`;
+  }
+  if (sub.regionCouncil) {
+    line += ` → ${sub.regionCouncil}`;
+  }
+  return line;
 }
 
 export function subSummary(sub, categories) {

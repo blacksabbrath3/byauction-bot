@@ -11,7 +11,7 @@ import {
 import {
   MAX_KEYWORD_GROUPS,
   inlineSourceChoice, inlineMultiSourcePick, inlineTypeChoice,
-  inlineRegion, inlineOblasts,
+  inlineRegion, inlineOblasts, inlineDistricts, inlineAfterDistrict,
   inlineWordTypeChoice, inlineKeywordsSkip, inlineMaxPriceSkip, inlineAddMoreGroups,
 } from "./keyboards.js";
 import {
@@ -22,7 +22,7 @@ import {
 } from "./steps.js";
 import { parseGroupInput, buildFlatTokens } from "./keywords.js";
 
-const MAX_SUBS = 10;
+const MAX_SUBS = 3;
 
 // ── Активные группы ключевых слов (регион / лот) ──────────────
 // dialog.data.keywordPhase === "region" → работаем с regionKeywordGroups
@@ -286,20 +286,79 @@ export async function handleCallback(token, update, env) {
     dialog.step = "region_oblast";
     await saveDialog(env, userId, dialog);
     const src = dialog.data.source;
-    const title = src === "butb"
-      ? `📋 <b>Новая подписка — БУТБ (et.butb.by)</b>\n\nВыберите область:`
-      : `📋 <b>Новая подписка — e-auction.by</b>\n\nВыберите область:`;
+    const title = `📋 <b>Новая подписка — ${src === "butb" ? "БУТБ (et.butb.by)" : "e-auction.by"}</b>\n\nВыберите область:`;
     return editMessage(token, chatId, msgId, title, { reply_markup: inlineOblasts() });
   }
 
-  if (data.startsWith("sub_obl:") && dialog.step === "region_oblast") {
-    dialog.data.region = [data.slice(8)];
-    dialog.step = "keywords_input";
-    dialog.data.keywordGroups = [];
+  if (data.startsWith("sub_obl:") && (dialog.step === "region_oblast" || dialog.step === "multi_region_oblast")) {
+    const oblast = data.slice(8);
+    dialog.data.region           = [oblast];
+    dialog.data.regionOblast     = oblast;
+    dialog.data.regionDistricts  = [];
+    dialog.step = "region_district";
     await saveDialog(env, userId, dialog);
+    return editMessage(token, chatId, msgId,
+      `📍 <b>${oblast} область</b>\n\nВыберите районы (можно несколько) или нажмите «☑️ Все районы»:`,
+      { reply_markup: inlineDistricts(oblast, []) });
+  }
+
+  // ── Выбор районов ──────────────────────────────────────────────
+  if (data.startsWith("sub_dst:") && dialog.step === "region_district") {
+    const val    = data.slice(8);
+    const oblast = dialog.data.regionOblast;
+    let selected = dialog.data.regionDistricts || [];
+
+    if (val === "all") {
+      selected = [];
+      dialog.data.regionDistricts = [];
+      await saveDialog(env, userId, dialog);
+      return editMessage(token, chatId, msgId,
+        `📍 <b>${oblast} область</b>\n\n☑️ Выбраны все районы. Нажмите «✔️ Готово»:`,
+        { reply_markup: inlineDistricts(oblast, []) });
+    }
+
+    if (val === "done") {
+      await saveDialog(env, userId, dialog);
+      const distLabel = selected.length > 0
+        ? selected.join(", ")
+        : "все районы";
+      return editMessage(token, chatId, msgId,
+        `📍 <b>${oblast} область</b>${selected.length > 0 ? ` — ${distLabel}` : ""}\n\nУточнить до сельсовета или завершить выбор?`,
+        { reply_markup: inlineAfterDistrict() });
+    }
+
+    selected = selected.includes(val)
+      ? selected.filter(d => d !== val)
+      : [...selected, val];
+    dialog.data.regionDistricts = selected;
+    await saveDialog(env, userId, dialog);
+    return editMessage(token, chatId, msgId,
+      `📍 <b>${oblast} область</b>\n\nВыберите районы (можно несколько):`,
+      { reply_markup: inlineDistricts(oblast, selected) });
+  }
+
+  // ── Сельсовет ──────────────────────────────────────────────────
+  if (data === "sub_council:skip") {
+    dialog.data.regionCouncil = "";
+    await saveDialog(env, userId, dialog);
+    // Переходим к следующему шагу (keywords или lot keywords)
+    if (dialog.data.keywordPhase === "region") {
+      return proceedToLotKeywords(token, chatId, msgId, userId, dialog, env);
+    }
     return promptKeywordsInput(token, chatId, msgId,
-        keywordsPromptText(dialog.data.source, "lot") + currentGroupsSummary([]),
-        "Например: склад, Минск, авто");
+      keywordsPromptText(dialog.data.source, "lot") + currentGroupsSummary([]),
+      "Например: склад, авто");
+  }
+
+  if (data === "sub_council:enter") {
+    dialog.step = "region_council";
+    await saveDialog(env, userId, dialog);
+    await editMessage(token, chatId, msgId,
+      `📍 <b>Уточнение до сельсовета</b>\n\nВведите название сельсовета или населённого пункта (часть названия):`,
+      { reply_markup: { inline_keyboard: [[{ text: "⏭ Пропустить", callback_data: "sub_council:skip" }, { text: "❌ Отмена", callback_data: "sub_cancel" }]] } });
+    return sendMessage(token, chatId, `✏️ <i>Введите название сельсовета:</i>`, {
+      reply_markup: { force_reply: true, input_field_placeholder: "Например: Тереховский", selective: true },
+    });
   }
 
   if (data === "sub_reg:words") {
@@ -544,6 +603,19 @@ export async function handleTextInDialog(token, chatId, userId, text, env) {
       { reply_markup: inlineWordTypeChoice(flatTokensNew, wordTypes, groupIndex) });
   }
 
+  if (dialog.step === "region_council") {
+    dialog.data.regionCouncil = text.trim();
+    dialog.data.keywordGroups = [];
+    if (dialog.data.keywordPhase === "region") {
+      return proceedToLotKeywords(token, chatId, msgId || 0, userId, dialog, env);
+    }
+    dialog.step = "keywords_input";
+    await saveDialog(env, userId, dialog);
+    return promptKeywordsInput(token, chatId, 0,
+      keywordsPromptText(dialog.data.source, "lot") + currentGroupsSummary([]),
+      "Например: склад, авто");
+  }
+
   if (dialog.step === "max_price") {
     const val = parseFloat(text.replace(/\s/g, "").replace(",", "."));
     if (isNaN(val) || val <= 0) {
@@ -574,27 +646,30 @@ export async function finishSubscription(token, chatId, userId, msgId, dialog, e
 
   let sub;
   const src = dialog.data.source;
-  const regionKeywords = dialog.data.regionKeywordGroups || [];
+  const regionKeywords  = dialog.data.regionKeywordGroups || [];
+  const regionDistricts = dialog.data.regionDistricts     || [];
+  const regionCouncil   = dialog.data.regionCouncil       || "";
 
   if (src === "multi") {
     sub = { id: shortUUID(), source: "multi", sources: dialog.data.multiSources || [],
-            region: dialog.data.region || "all", regionKeywords,
+            region: dialog.data.region || "all", regionKeywords, regionDistricts, regionCouncil,
             keywords: dialog.data.keywordGroups || [] };
   } else if (src === "rechitsa") {
     sub = { id: shortUUID(), source: "rechitsa",
             keywords: dialog.data.keywordGroups || [] };
   } else if (src === "torgigov") {
     sub = { id: shortUUID(), source: "torgigov", categories: dialog.data.categories || [],
-            region: dialog.data.region || "all", regionKeywords,
+            region: dialog.data.region || "all", regionKeywords, regionDistricts, regionCouncil,
             keywords: dialog.data.keywordGroups || [],
             max_price: dialog.data.max_price || 0 };
   } else if (src === "butb") {
-    sub = { id: shortUUID(), source: "butb", region: dialog.data.region || "all", regionKeywords,
+    sub = { id: shortUUID(), source: "butb", region: dialog.data.region || "all",
+            regionKeywords, regionDistricts, regionCouncil,
             keywords: dialog.data.keywordGroups || [] };
   } else {
     sub = { id: shortUUID(), source: "eauction", type: dialog.data.type || "auction",
             categories: dialog.data.categories || [], region: dialog.data.region || "keywords",
-            regionKeywords,
+            regionKeywords, regionDistricts, regionCouncil,
             keywords: dialog.data.keywordGroups || [], max_price: dialog.data.max_price || 0 };
   }
 
