@@ -219,7 +219,7 @@ async function handleSendNotifications(body, env) {
       matchFn: (sub) => {
         if (sub.source !== "butb" && sub.source !== "multi") return false;
         if (sub.source === "multi" && !(sub.sources || []).includes("butb")) return false;
-        if (!matchRegion(sub.region, lot.location, sub.regionKeywords)) return false;
+        if (!matchRegion(sub.region, lot.location, sub.regionKeywords, sub)) return false;
         return matchKeywords(searchText, sub.keywords);
       },
     };
