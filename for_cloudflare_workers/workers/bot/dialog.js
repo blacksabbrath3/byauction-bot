@@ -372,8 +372,13 @@ export async function handleCallback(token, update, env) {
 
     delete dialog.data.currentFlatTokens;
     delete dialog.data.currentParsedParts;
-    await saveDialog(env, userId, dialog);
 
+    // В фазе региона — сразу переходим к ключевым словам лота
+    if (dialog.data.keywordPhase === "region") {
+      return proceedToLotKeywords(token, chatId, msgId, userId, dialog, env);
+    }
+
+    await saveDialog(env, userId, dialog);
     return editMessage(token, chatId, msgId,
       `📝 <b>Группа ${groupIdx + 1} сохранена</b>\n\n` +
       groupSummaryText(group) +
