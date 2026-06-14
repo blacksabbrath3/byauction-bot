@@ -2,7 +2,7 @@
  * bot/dialog.js — Диалог подписки: handleCallback, handleTextInDialog, finishSubscription.
  */
 
-import { sendMessage, editMessage, answerCallback } from "../../shared/telegram.js";
+import { sendMessage, editMessage, answerCallback, deleteMessage } from "../../shared/telegram.js";
 import { sourceById } from "../../shared/sources.js";
 import {
   getSubs, saveSubs, getDialog, saveDialog, deleteDialog,
@@ -400,14 +400,21 @@ export async function handleCallback(token, update, env) {
     await saveDialog(env, userId, dialog);
     await editMessage(token, chatId, msgId,
       maxPricePromptText(dialog.data.source), { reply_markup: inlineMaxPriceSkip() });
-    return sendMessage(token, chatId, `✏️ <i>Введите число, например: <code>5000</code></i>`, {
+    const frMsg = await sendMessage(token, chatId, `✏️ <i>Введите число, например: <code>5000</code></i>`, {
       reply_markup: { force_reply: true, input_field_placeholder: "Введите сумму в BYN...", selective: true },
     });
+    dialog.data.priceForceReplyMsgId = frMsg?.result?.message_id;
+    await saveDialog(env, userId, dialog);
+    return frMsg;
   }
 
   // ── Максимальная цена: пропустить ─────────────────────────────
   if (data === "sub_mp:skip") {
     dialog.data.max_price = 0;
+    if (dialog.data.priceForceReplyMsgId) {
+      await deleteMessage(token, chatId, dialog.data.priceForceReplyMsgId).catch(() => {});
+      delete dialog.data.priceForceReplyMsgId;
+    }
     const categories = await getCategories(env);
     return finishSubscription(token, chatId, userId, msgId, dialog, env, categories);
   }
@@ -509,9 +516,12 @@ export async function handleCallback(token, update, env) {
     await saveDialog(env, userId, dialog);
     await editMessage(token, chatId, msgId,
       maxPricePromptText(src), { reply_markup: inlineMaxPriceSkip() });
-    return sendMessage(token, chatId, `✏️ <i>Введите число, например: <code>5000</code></i>`, {
+    const frMsg = await sendMessage(token, chatId, `✏️ <i>Введите число, например: <code>5000</code></i>`, {
       reply_markup: { force_reply: true, input_field_placeholder: "Введите сумму в BYN...", selective: true },
     });
+    dialog.data.priceForceReplyMsgId = frMsg?.result?.message_id;
+    await saveDialog(env, userId, dialog);
+    return frMsg;
   }
 
   // ── Расширенный поиск ─────────────────────────────────────────
@@ -624,6 +634,10 @@ export async function handleTextInDialog(token, chatId, userId, text, env) {
         { reply_markup: inlineMaxPriceSkip() });
     }
     dialog.data.max_price = val;
+    if (dialog.data.priceForceReplyMsgId) {
+      await deleteMessage(token, chatId, dialog.data.priceForceReplyMsgId).catch(() => {});
+      delete dialog.data.priceForceReplyMsgId;
+    }
     const categories = await getCategories(env);
     return finishSubscription(token, chatId, userId, null, dialog, env, categories);
   }
