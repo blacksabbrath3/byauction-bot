@@ -323,7 +323,7 @@ export async function handleCallback(token, update, env) {
         ? selected.join(", ")
         : "все районы";
       return editMessage(token, chatId, msgId,
-        `📍 <b>${oblast} область</b>${selected.length > 0 ? ` — ${distLabel}` : ""}\n\nУточнить до сельсовета или завершить выбор?`,
+        `📍 <b>${oblast} область</b>${selected.length > 0 ? ` — ${distLabel}` : ""}\n\nЗавершить или уточнить населённый пункт?`,
         { reply_markup: inlineAfterDistrict() });
     }
 
@@ -354,10 +354,10 @@ export async function handleCallback(token, update, env) {
     dialog.step = "region_council";
     await saveDialog(env, userId, dialog);
     await editMessage(token, chatId, msgId,
-      `📍 <b>Уточнение до сельсовета</b>\n\nВведите название сельсовета или населённого пункта (часть названия):`,
+      `📍 <b>Населённый пункт</b>\n\nВведите название населённого пункта (можно часть):`,
       { reply_markup: { inline_keyboard: [[{ text: "⏭ Пропустить", callback_data: "sub_council:skip" }, { text: "❌ Отмена", callback_data: "sub_cancel" }]] } });
-    return sendMessage(token, chatId, `✏️ <i>Введите название сельсовета:</i>`, {
-      reply_markup: { force_reply: true, input_field_placeholder: "Например: Тереховский", selective: true },
+    return sendMessage(token, chatId, `✏️ <i>Введите название населённого пункта</i>`, {
+      reply_markup: { force_reply: true, input_field_placeholder: "Введите название населённого пункта", selective: true },
     });
   }
 

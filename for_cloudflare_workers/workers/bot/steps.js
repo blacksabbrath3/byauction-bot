@@ -55,7 +55,7 @@ function regionLine(sub) {
     line += ` → ${sub.regionDistricts.join(", ")}`;
   }
   if (sub.regionCouncil) {
-    line += ` → ${sub.regionCouncil}`;
+    line += ` → нп. ${sub.regionCouncil}`;
   }
   return line;
 }

@@ -134,12 +134,12 @@ export function inlineDistricts(oblast, selected = []) {
   return { inline_keyboard: rows };
 }
 
-/** После выбора районов: завершить или уточнить сельсовет. */
+/** После выбора районов: завершить или уточнить до населённого пункта. */
 export function inlineAfterDistrict() {
   return { inline_keyboard: [
-    [{ text: "✅ Завершить выбор",      callback_data: "sub_council:skip" }],
-    [{ text: "🏘 Уточнить сельсовет",  callback_data: "sub_council:enter" }],
-    [{ text: "❌ Отмена",              callback_data: "sub_cancel" }],
+    [{ text: "✅ Завершить выбор",            callback_data: "sub_council:skip"  }],
+    [{ text: "📍 Ввести населённый пункт",    callback_data: "sub_council:enter" }],
+    [{ text: "❌ Отмена",                     callback_data: "sub_cancel" }],
   ]};
 }
 
