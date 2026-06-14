@@ -40,9 +40,26 @@ async function proceedToLotKeywords(token, chatId, msgId, userId, dialog, env) {
   dialog.data.keywordGroups = [];
   dialog.step = "keywords_input";
   await saveDialog(env, userId, dialog);
-  return editMessage(token, chatId, msgId,
+  return promptKeywordsInput(token, chatId, msgId,
     keywordsPromptText(dialog.data.source, "lot") + currentGroupsSummary([]),
-    { reply_markup: inlineKeywordsSkip() });
+    "Введите слова через запятую, например: Минск, авто");
+}
+
+/**
+ * Показывает приглашение ввести ключевые слова.
+ * Редактирует предыдущее сообщение (кнопка «Пропустить») и
+ * отправляет новое с force_reply — Telegram автоматически
+ * фокусирует поле ввода с подсказкой над ним.
+ */
+async function promptKeywordsInput(token, chatId, msgId, promptText, placeholder) {
+  await editMessage(token, chatId, msgId, promptText, { reply_markup: inlineKeywordsSkip() });
+  return sendMessage(token, chatId, `✏️ <i>Введите ответ в поле ниже:</i>`, {
+    reply_markup: {
+      force_reply:              true,
+      input_field_placeholder:  placeholder || "Слова через запятую...",
+      selective:                true,
+    },
+  });
 }
 
 // ── Начало диалога ────────────────────────────────────────────
@@ -110,9 +127,9 @@ export async function handleCallback(token, update, env) {
       dialog.step = "keywords_input";
       dialog.data.keywordGroups = [];
       await saveDialog(env, userId, dialog);
-      return editMessage(token, chatId, msgId,
+      return promptKeywordsInput(token, chatId, msgId,
         keywordsPromptText("rechitsa") + currentGroupsSummary(dialog.data.keywordGroups),
-        { reply_markup: inlineKeywordsSkip() });
+        "Например: склад, Минск, авто");
     }
 
     if (source === "torgigov") {
@@ -162,9 +179,9 @@ export async function handleCallback(token, update, env) {
         dialog.data.keywordGroups = [];
         dialog.data.region = "all";
         await saveDialog(env, userId, dialog);
-        return editMessage(token, chatId, msgId,
-          keywordsPromptText("multi") + currentGroupsSummary([]),
-          { reply_markup: inlineKeywordsSkip() });
+        return promptKeywordsInput(token, chatId, msgId,
+        keywordsPromptText("multi") + currentGroupsSummary([]),
+        "Например: склад, Минск, авто");
       }
     }
 
@@ -183,18 +200,18 @@ export async function handleCallback(token, update, env) {
       dialog.step = "keywords_input";
       dialog.data.keywordGroups = [];
       await saveDialog(env, userId, dialog);
-      return editMessage(token, chatId, msgId,
+      return promptKeywordsInput(token, chatId, msgId,
         keywordsPromptText("multi", "lot") + currentGroupsSummary([]),
-        { reply_markup: inlineKeywordsSkip() });
+        "Например: склад, Минск, авто");
     }
     if (data === "sub_reg:words") {
       dialog.data.region = "keywords";
       dialog.step = "region_keywords_input";
       dialog.data.regionKeywordGroups = []; dialog.data.keywordPhase = "region";
       await saveDialog(env, userId, dialog);
-      return editMessage(token, chatId, msgId,
+      return promptKeywordsInput(token, chatId, msgId,
         keywordsPromptText("multi", "region") + currentGroupsSummary([]),
-        { reply_markup: inlineKeywordsSkip() });
+        "Например: Гомель, Жлобин");
     }
     if (data === "sub_reg:oblast") {
       dialog.step = "multi_region_oblast";
@@ -210,9 +227,9 @@ export async function handleCallback(token, update, env) {
     dialog.step = "keywords_input";
     dialog.data.keywordGroups = [];
     await saveDialog(env, userId, dialog);
-    return editMessage(token, chatId, msgId,
-      keywordsPromptText("multi", "lot") + currentGroupsSummary([]),
-      { reply_markup: inlineKeywordsSkip() });
+    return promptKeywordsInput(token, chatId, msgId,
+        keywordsPromptText("multi", "lot") + currentGroupsSummary([]),
+        "Например: склад, Минск, авто");
   }
 
   // ── torgigov: категории — ОТКЛЮЧЕНО ──────────────────────────
@@ -260,9 +277,9 @@ export async function handleCallback(token, update, env) {
     dialog.step = "keywords_input";
     dialog.data.keywordGroups = [];
     await saveDialog(env, userId, dialog);
-    return editMessage(token, chatId, msgId,
-      keywordsPromptText(dialog.data.source, "lot") + currentGroupsSummary([]),
-      { reply_markup: inlineKeywordsSkip() });
+    return promptKeywordsInput(token, chatId, msgId,
+        keywordsPromptText(dialog.data.source, "lot") + currentGroupsSummary([]),
+        "Например: склад, Минск, авто");
   }
 
   if (data === "sub_reg:oblast") {
@@ -280,9 +297,9 @@ export async function handleCallback(token, update, env) {
     dialog.step = "keywords_input";
     dialog.data.keywordGroups = [];
     await saveDialog(env, userId, dialog);
-    return editMessage(token, chatId, msgId,
-      keywordsPromptText(dialog.data.source, "lot") + currentGroupsSummary([]),
-      { reply_markup: inlineKeywordsSkip() });
+    return promptKeywordsInput(token, chatId, msgId,
+        keywordsPromptText(dialog.data.source, "lot") + currentGroupsSummary([]),
+        "Например: склад, Минск, авто");
   }
 
   if (data === "sub_reg:words") {
@@ -290,9 +307,9 @@ export async function handleCallback(token, update, env) {
     dialog.step = "region_keywords_input";
     dialog.data.regionKeywordGroups = []; dialog.data.keywordPhase = "region";
     await saveDialog(env, userId, dialog);
-    return editMessage(token, chatId, msgId,
-      keywordsPromptText(dialog.data.source, "region") + currentGroupsSummary([]),
-      { reply_markup: inlineKeywordsSkip() });
+    return promptKeywordsInput(token, chatId, msgId,
+        keywordsPromptText(dialog.data.source, "region") + currentGroupsSummary([]),
+        "Например: Гомель, Жлобин");
   }
 
   // ── Ключевые слова: пропустить ────────────────────────────────
@@ -316,8 +333,11 @@ export async function handleCallback(token, update, env) {
     }
     dialog.step = "max_price";
     await saveDialog(env, userId, dialog);
-    return editMessage(token, chatId, msgId,
+    await editMessage(token, chatId, msgId,
       maxPricePromptText(dialog.data.source), { reply_markup: inlineMaxPriceSkip() });
+    return sendMessage(token, chatId, `✏️ <i>Введите число, например: <code>5000</code></i>`, {
+      reply_markup: { force_reply: true, input_field_placeholder: "Введите сумму в BYN...", selective: true },
+    });
   }
 
   // ── Максимальная цена: пропустить ─────────────────────────────
@@ -422,8 +442,11 @@ export async function handleCallback(token, update, env) {
     }
     dialog.step = "max_price";
     await saveDialog(env, userId, dialog);
-    return editMessage(token, chatId, msgId,
+    await editMessage(token, chatId, msgId,
       maxPricePromptText(src), { reply_markup: inlineMaxPriceSkip() });
+    return sendMessage(token, chatId, `✏️ <i>Введите число, например: <code>5000</code></i>`, {
+      reply_markup: { force_reply: true, input_field_placeholder: "Введите сумму в BYN...", selective: true },
+    });
   }
 
   // ── Расширенный поиск ─────────────────────────────────────────
