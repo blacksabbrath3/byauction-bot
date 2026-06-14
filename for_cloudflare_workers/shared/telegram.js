@@ -17,6 +17,9 @@ export const editMessage = (token, chatId, messageId, text, extra = {}) =>
 export const answerCallback = (token, callbackId, text = "") =>
   tgCall(token, "answerCallbackQuery", { callback_query_id: callbackId, text });
 
+export const deleteMessage = (token, chatId, messageId) =>
+  tgCall(token, "deleteMessage", { chat_id: chatId, message_id: messageId });
+
 export async function tgSend(token, chatId, text) {
   return fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
     method: "POST",
