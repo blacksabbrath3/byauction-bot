@@ -52,14 +52,20 @@ async function proceedToLotKeywords(token, chatId, msgId, userId, dialog, env) {
  * фокусирует поле ввода с подсказкой над ним.
  */
 async function promptKeywordsInput(token, chatId, msgId, promptText, placeholder) {
-  await editMessage(token, chatId, msgId, promptText, { reply_markup: inlineKeywordsSkip() });
-  return sendMessage(token, chatId, `✏️ <i>Введите ответ в поле ниже:</i>`, {
-    reply_markup: {
-      force_reply:              true,
-      input_field_placeholder:  placeholder || "Слова через запятую...",
-      selective:                true,
-    },
-  });
+  if (msgId) {
+    // Редактируем существующее сообщение + шлём force_reply
+    await editMessage(token, chatId, msgId, promptText, { reply_markup: inlineKeywordsSkip() });
+    return sendMessage(token, chatId, `✏️ <i>Введите ответ в поле ниже:</i>`, {
+      reply_markup: {
+        force_reply:             true,
+        input_field_placeholder: placeholder || "Слова через запятую...",
+        selective:               true,
+      },
+    });
+  } else {
+    // Просто новое сообщение с кнопкой «Пропустить» — force_reply уже был
+    return sendMessage(token, chatId, promptText, { reply_markup: inlineKeywordsSkip() });
+  }
 }
 
 // ── Начало диалога ────────────────────────────────────────────
@@ -606,14 +612,8 @@ export async function handleTextInDialog(token, chatId, userId, text, env) {
   if (dialog.step === "region_council") {
     dialog.data.regionCouncil = text.trim();
     dialog.data.keywordGroups = [];
-    if (dialog.data.keywordPhase === "region") {
-      return proceedToLotKeywords(token, chatId, msgId || 0, userId, dialog, env);
-    }
-    dialog.step = "keywords_input";
-    await saveDialog(env, userId, dialog);
-    return promptKeywordsInput(token, chatId, 0,
-      keywordsPromptText(dialog.data.source, "lot") + currentGroupsSummary([]),
-      "Например: склад, авто");
+    // Всегда переходим к ключевым словам лота — без лишнего force_reply
+    return proceedToLotKeywords(token, chatId, null, userId, dialog, env);
   }
 
   if (dialog.step === "max_price") {
