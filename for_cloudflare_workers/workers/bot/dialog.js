@@ -389,10 +389,12 @@ export async function handleCallback(token, update, env) {
     dialog.step = "region_council";
     await saveDialog(env, userId, dialog);
     await editMessage(token, chatId, msgId,
-      `📍 <b>Населённый пункт</b>\n\nВведите название населённого пункта (можно часть):`,
+      `📍 <b>Населённый пункт</b>\n\nВведите названия населённых пунктов через запятую
+
+(можно несклоняемую часть слова, например: <code>Тереховк</code> вместо «Тереховка»/<wbr>«Тереховский»):`,
       { reply_markup: { inline_keyboard: [[{ text: "⏭ Пропустить", callback_data: "sub_council:skip" }, { text: "❌ Отмена", callback_data: "sub_cancel" }]] } });
-    return sendMessage(token, chatId, `✏️ <i>Введите название населённого пункта</i>`, {
-      reply_markup: { force_reply: true, input_field_placeholder: "Введите название населённого пункта", selective: true },
+    return sendMessage(token, chatId, `✏️ <i>Введите названия через запятую:</i>`, {
+      reply_markup: { force_reply: true, input_field_placeholder: "Тереховка, Черёмуха, ...", selective: true },
     });
   }
 
@@ -473,8 +475,18 @@ export async function handleCallback(token, update, env) {
       return answerCallback(token, cb.id, "Ошибка: токен не найден");
     }
 
-    const group     = groups[groupIdx];
-    const groupItem = group.find(w => w.key === flatToken.key);
+    // Для council ищем токен по ключу во всех группах (каждый пункт — отдельная группа)
+    let groupItem;
+    if (dialog.data.keywordPhase === "council") {
+      for (const g of groups) {
+        groupItem = g.find(w => w.key === flatToken.key);
+        if (groupItem) break;
+      }
+    } else {
+      const group = groups[groupIdx];
+      if (!group) return answerCallback(token, cb.id, "Ошибка: группа не найдена");
+      groupItem = group.find(w => w.key === flatToken.key);
+    }
     if (!groupItem) return answerCallback(token, cb.id, "Ошибка: слово не найдено");
 
     groupItem.type = type;
@@ -482,12 +494,20 @@ export async function handleCallback(token, update, env) {
 
     await saveDialog(env, userId, dialog);
 
+    // Собираем wordTypes по всем группам для отображения галочек
     const wordTypes = {};
-    group.forEach(w => { wordTypes[w.key] = w.type || "partial"; });
+    (dialog.data.keywordPhase === "council"
+      ? groups.flat()
+      : groups[groupIdx] || []
+    ).forEach(w => { wordTypes[w.key] = w.type || "partial"; });
+
+    const displaySummary = dialog.data.keywordPhase === "council"
+      ? groups.map(g => groupSummaryText(g)).join(" <i>или</i>\n")
+      : groupSummaryText(groups[groupIdx]);
 
     // editMessage — обновляем существующее сообщение (галочки переключаются на месте)
     return editMessage(token, chatId, msgId,
-      `${groupSummaryText(group)}\n\n${wordTypesHelpText()}`,
+      `${displaySummary}\n\n${wordTypesHelpText()}`,
       { reply_markup: inlineWordTypeChoice(flatTokens, wordTypes, groupIdx) });
   }
 
@@ -687,32 +707,38 @@ export async function handleTextInDialog(token, chatId, userId, text, env) {
   if (dialog.step === "region_council") {
     const parsed = parseGroupInput(text);
     if (parsed.length === 0) {
-      return sendMessage(token, chatId, "⚠️ Введите хотя бы одно слово.");
+      return sendMessage(token, chatId, "⚠️ Введите хотя бы одно название.");
     }
 
-    const flatTokensNew = buildFlatTokens(parsed);
-    const group = flatTokensNew.map(t => ({
-      key:         t.key,
-      word:        t.displayWord,
-      type:        "partial",
-      isPhrase:    t.isPhrase,
-      phraseGroup: t.isPhrase ? t.fullPhrase : null,
-    }));
+    // Каждый населённый пункт — отдельная группа (логика ИЛИ).
+    // Фраза из нескольких слов (через пробел) — одна группа (логика И внутри фразы).
+    const groups = parsed.map(part => {
+      return buildFlatTokens([part]).map(t => ({
+        key:         t.key,
+        word:        t.displayWord,
+        type:        "partial",
+        isPhrase:    t.isPhrase,
+        phraseGroup: t.isPhrase ? t.fullPhrase : null,
+      }));
+    });
 
-    // Храним в отдельном поле, используем фазу "council"
-    dialog.data.regionCouncilGroups = [group];
+    // Все токены вместе — для одного экрана выбора типа
+    const allFlatTokens = buildFlatTokens(parsed);
+
+    dialog.data.regionCouncilGroups = groups;
     dialog.data.keywordPhase        = "council";
-    dialog.data.councilFlatTokens   = flatTokensNew;
+    dialog.data.councilFlatTokens   = allFlatTokens;
     dialog.step = "council_select_types";
 
     const wordTypes = {};
-    group.forEach(w => { wordTypes[w.key] = "partial"; });
+    allFlatTokens.forEach(t => { wordTypes[t.key] = "partial"; });
 
     await saveDialog(env, userId, dialog);
     return sendWordTypeScreen(token, chatId,
       wordTypesHelpText(),
-      groupSummaryText(group),
-      inlineWordTypeChoice(flatTokensNew, wordTypes, 0));
+      groups.map(g => groupSummaryText(g)).join(" <i>или</i>
+"),
+      inlineWordTypeChoice(allFlatTokens, wordTypes, 0));
   }
 
   if (dialog.step === "max_price") {
