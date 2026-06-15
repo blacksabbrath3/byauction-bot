@@ -54,8 +54,8 @@ function regionLine(sub) {
   if (sub.regionDistricts?.length > 0) {
     line += ` → ${sub.regionDistricts.join(", ")}`;
   }
-  if (sub.regionCouncil) {
-    line += ` → нп. ${sub.regionCouncil}`;
+  if (sub.regionCouncilGroups?.length > 0) {
+    line += ` → нп. ${formatKeywordGroups(sub.regionCouncilGroups)}`;
   }
   return line;
 }

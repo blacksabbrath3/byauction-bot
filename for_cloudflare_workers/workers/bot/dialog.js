@@ -29,9 +29,19 @@ const MAX_SUBS = 3;
 // иначе (по умолчанию "lot")            → работаем с keywordGroups
 
 function activeGroups(dialog) {
-  return dialog.data.keywordPhase === "region"
-    ? (dialog.data.regionKeywordGroups ||= [])
-    : (dialog.data.keywordGroups ||= []);
+  if (dialog.data.keywordPhase === "region") {
+    return (dialog.data.regionKeywordGroups ||= []);
+  }
+  if (dialog.data.keywordPhase === "council") {
+    return (dialog.data.regionCouncilGroups ||= []);
+  }
+  return (dialog.data.keywordGroups ||= []);
+}
+
+/** После завершения ввода населённого пункта переходим к лот-ключевым. */
+async function proceedAfterCouncil(token, chatId, msgId, userId, dialog, env) {
+  delete dialog.data.councilFlatTokens;
+  return proceedToLotKeywords(token, chatId, msgId, userId, dialog, env);
 }
 
 /** После завершения ввода региональных ключевых слов переходим к лот-ключевым. */
@@ -365,7 +375,7 @@ export async function handleCallback(token, update, env) {
 
   // ── Сельсовет ──────────────────────────────────────────────────
   if (data === "sub_council:skip") {
-    dialog.data.regionCouncil = "";
+    dialog.data.regionCouncilGroups = [];
     await saveDialog(env, userId, dialog);
     // Переходим к следующему шагу (keywords или lot keywords)
     if (dialog.data.keywordPhase === "region") {
@@ -402,6 +412,10 @@ export async function handleCallback(token, update, env) {
     if (dialog.data.keywordPhase === "region") {
       dialog.data.regionKeywordGroups = [];
       return proceedToLotKeywords(token, chatId, msgId, userId, dialog, env);
+    }
+    if (dialog.data.keywordPhase === "council") {
+      dialog.data.regionCouncilGroups = [];
+      return proceedAfterCouncil(token, chatId, msgId, userId, dialog, env);
     }
 
     // Фаза "lot" — завершаем подписку
@@ -494,6 +508,11 @@ export async function handleCallback(token, update, env) {
       return proceedToLotKeywords(token, chatId, msgId, userId, dialog, env);
     }
 
+    // В фазе населённого пункта — переходим к ключевым словам лота
+    if (dialog.data.keywordPhase === "council") {
+      return proceedAfterCouncil(token, chatId, msgId, userId, dialog, env);
+    }
+
     await saveDialog(env, userId, dialog);
     return editMessage(token, chatId, msgId,
       `📝 <b>Группа ${groupIdx + 1} сохранена</b>\n\n` +
@@ -508,7 +527,11 @@ export async function handleCallback(token, update, env) {
     if (groups.length >= MAX_KEYWORD_GROUPS) {
       return answerCallback(token, cb.id, `Максимум ${MAX_KEYWORD_GROUPS} групп`);
     }
-    dialog.step = dialog.data.keywordPhase === "region" ? "region_keywords_input" : "keywords_input";
+    dialog.step = dialog.data.keywordPhase === "region"
+      ? "region_keywords_input"
+      : dialog.data.keywordPhase === "council"
+        ? "region_council"
+        : "keywords_input";
     await saveDialog(env, userId, dialog);
     return editMessage(token, chatId, msgId,
       `📝 Введите слова для группы ${groups.length + 1}:\n\n` +
@@ -522,6 +545,9 @@ export async function handleCallback(token, update, env) {
   if (data === "sub_kg:done") {
     if (dialog.data.keywordPhase === "region") {
       return proceedToLotKeywords(token, chatId, msgId, userId, dialog, env);
+    }
+    if (dialog.data.keywordPhase === "council") {
+      return proceedAfterCouncil(token, chatId, msgId, userId, dialog, env);
     }
 
     dialog.data.keywords = dialog.data.keywordGroups || [];
@@ -566,7 +592,7 @@ export async function handleCallback(token, update, env) {
   if (data.startsWith("sub_back_to_types|")) {
     const gIdx   = parseInt(data.split("|")[1]);
     const groups = activeGroups(dialog);
-    dialog.step  = dialog.data.keywordPhase === "region" ? "region_keywords_select_types" : "keywords_select_types";
+    dialog.step  = dialog.data.keywordPhase === "region" ? "region_keywords_select_types" : dialog.data.keywordPhase === "council" ? "council_select_types" : "keywords_select_types";
     if (!groups[gIdx]) {
       return answerCallback(token, cb.id, "Ошибка: группа не найдена");
     }
@@ -606,7 +632,7 @@ export async function handleTextInDialog(token, chatId, userId, text, env) {
     }
     const group = groups[gIdx];
     group.forEach(w => { w.type = "custom"; w.pattern = text; });
-    dialog.step = dialog.data.keywordPhase === "region" ? "region_keywords_select_types" : "keywords_select_types";
+    dialog.step = dialog.data.keywordPhase === "region" ? "region_keywords_select_types" : dialog.data.keywordPhase === "council" ? "council_select_types" : "keywords_select_types";
     await saveDialog(env, userId, dialog);
     return sendMessage(token, chatId,
       `✅ Шаблон "${text}" применён к группе ${gIdx + 1}\n\n` + groupSummaryText(group),
@@ -632,7 +658,7 @@ export async function handleTextInDialog(token, chatId, userId, text, env) {
     const groups = activeGroups(dialog);
     groups.push(group);
     const groupIndex = groups.length - 1;
-    dialog.step = dialog.data.keywordPhase === "region" ? "region_keywords_select_types" : "keywords_select_types";
+    dialog.step = dialog.data.keywordPhase === "region" ? "region_keywords_select_types" : dialog.data.keywordPhase === "council" ? "council_select_types" : "keywords_select_types";
     dialog.data.currentParsedParts = parsed;
     dialog.data.currentFlatTokens  = flatTokensNew;
 
@@ -647,10 +673,34 @@ export async function handleTextInDialog(token, chatId, userId, text, env) {
   }
 
   if (dialog.step === "region_council") {
-    dialog.data.regionCouncil = text.trim();
-    dialog.data.keywordGroups = [];
-    // Всегда переходим к ключевым словам лота — без лишнего force_reply
-    return proceedToLotKeywords(token, chatId, null, userId, dialog, env);
+    const parsed = parseGroupInput(text);
+    if (parsed.length === 0) {
+      return sendMessage(token, chatId, "⚠️ Введите хотя бы одно слово.");
+    }
+
+    const flatTokensNew = buildFlatTokens(parsed);
+    const group = flatTokensNew.map(t => ({
+      key:         t.key,
+      word:        t.displayWord,
+      type:        "partial",
+      isPhrase:    t.isPhrase,
+      phraseGroup: t.isPhrase ? t.fullPhrase : null,
+    }));
+
+    // Храним в отдельном поле, используем фазу "council"
+    dialog.data.regionCouncilGroups = [group];
+    dialog.data.keywordPhase        = "council";
+    dialog.data.councilFlatTokens   = flatTokensNew;
+    dialog.step = "council_select_types";
+
+    const wordTypes = {};
+    group.forEach(w => { wordTypes[w.key] = "partial"; });
+
+    await saveDialog(env, userId, dialog);
+    return sendWordTypeScreen(token, chatId,
+      wordTypesHelpText(),
+      groupSummaryText(group),
+      inlineWordTypeChoice(flatTokensNew, wordTypes, 0));
   }
 
   if (dialog.step === "max_price") {
@@ -689,28 +739,28 @@ export async function finishSubscription(token, chatId, userId, msgId, dialog, e
   const src = dialog.data.source;
   const regionKeywords  = dialog.data.regionKeywordGroups || [];
   const regionDistricts = dialog.data.regionDistricts     || [];
-  const regionCouncil   = dialog.data.regionCouncil       || "";
+  const regionCouncilGroups = dialog.data.regionCouncilGroups || [];
 
   if (src === "multi") {
     sub = { id: shortUUID(), source: "multi", sources: dialog.data.multiSources || [],
-            region: dialog.data.region || "all", regionKeywords, regionDistricts, regionCouncil,
+            region: dialog.data.region || "all", regionKeywords, regionDistricts, regionCouncilGroups,
             keywords: dialog.data.keywordGroups || [] };
   } else if (src === "rechitsa") {
     sub = { id: shortUUID(), source: "rechitsa",
             keywords: dialog.data.keywordGroups || [] };
   } else if (src === "torgigov") {
     sub = { id: shortUUID(), source: "torgigov", categories: dialog.data.categories || [],
-            region: dialog.data.region || "all", regionKeywords, regionDistricts, regionCouncil,
+            region: dialog.data.region || "all", regionKeywords, regionDistricts, regionCouncilGroups,
             keywords: dialog.data.keywordGroups || [],
             max_price: dialog.data.max_price || 0 };
   } else if (src === "butb") {
     sub = { id: shortUUID(), source: "butb", region: dialog.data.region || "all",
-            regionKeywords, regionDistricts, regionCouncil,
+            regionKeywords, regionDistricts, regionCouncilGroups,
             keywords: dialog.data.keywordGroups || [] };
   } else {
     sub = { id: shortUUID(), source: "eauction", type: dialog.data.type || "auction",
             categories: dialog.data.categories || [], region: dialog.data.region || "keywords",
-            regionKeywords, regionDistricts, regionCouncil,
+            regionKeywords, regionDistricts, regionCouncilGroups,
             keywords: dialog.data.keywordGroups || [], max_price: dialog.data.max_price || 0 };
   }
 

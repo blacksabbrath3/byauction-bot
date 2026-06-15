@@ -120,12 +120,13 @@ export function matchGeoToken(locationText, token) {
  * Проверяет подходит ли locationText под регион подписки.
  *
  * sub.region:
- *   "all"                → всегда true
- *   "keywords"           → матчинг через sub.regionKeywords (matchKeywords)
- *   ["Гомельская"]       → нечёткий матчинг по стемам названий
+ *   "all"               → всегда true
+ *   "keywords"          → матчинг через sub.regionKeywords (matchKeywords)
+ *   ["Гомельская"]      → нечёткий матчинг по стемам
  *
- * sub.regionDistricts:   массив строк — районы (нечёткий матчинг)
- * sub.regionCouncil:     строка — сельсовет/горсовет (точное вхождение)
+ * sub.regionDistricts:     массив строк — районы (нечёткий, ИЛИ)
+ * sub.regionCouncilGroups: группы ключевых слов населённого пункта
+ *                          (matchKeywords, поддерживает типы partial/exact/extended/custom)
  */
 export function matchRegion(region, locationText, regionKeywords, sub) {
   if (!region || region === "all") return true;
@@ -137,32 +138,20 @@ export function matchRegion(region, locationText, regionKeywords, sub) {
     return matchKeywords(loc, regionKeywords);
   }
 
-  // Область — нечёткий матчинг
+  // Область — нечёткий матчинг (ИЛИ)
   const regions = Array.isArray(region) ? region : [region];
-  const oblastMatch = regions.some(r => matchGeoToken(loc, r));
-  if (!oblastMatch) return false;
+  if (!regions.some(r => matchGeoToken(loc, r))) return false;
 
-  // Районы — если выбраны, хотя бы один должен совпасть
+  // Районы — хотя бы один совпадает (ИЛИ)
   const districts = sub?.regionDistricts;
   if (districts?.length > 0) {
-    const districtMatch = districts.some(d => matchGeoToken(loc, d));
-    if (!districtMatch) return false;
+    if (!districts.some(d => matchGeoToken(loc, d))) return false;
   }
 
-  // Сельсовет — если указан, должен встречаться (частичное совпадение)
-  // Населённый пункт — OR по запятым, частичное нечёткое совпадение
-  const council = sub?.regionCouncil;
-  if (council) {
-    const places = council.split(/[,;]+/).map(s => s.trim().toLowerCase()).filter(Boolean);
-    if (places.length > 0) {
-      const councilMatch = places.some(p => {
-        const stem = stemGeo(p);
-        return new RegExp(
-          stem.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '[а-яёА-ЯЁ]{0,4}', 'i'
-        ).test(loc);
-      });
-      if (!councilMatch) return false;
-    }
+  // Населённый пункт — через matchKeywords с поддержкой типов совпадений
+  const councilGroups = sub?.regionCouncilGroups;
+  if (councilGroups?.length > 0) {
+    if (!matchKeywords(loc, councilGroups)) return false;
   }
 
   return true;
