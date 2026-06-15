@@ -40,9 +40,10 @@ async function proceedToLotKeywords(token, chatId, msgId, userId, dialog, env) {
   dialog.data.keywordGroups = [];
   dialog.step = "keywords_input";
   await saveDialog(env, userId, dialog);
+  await clearKeywordsForceReply(token, chatId, dialog);
   return promptKeywordsInput(token, chatId, msgId,
     keywordsPromptText(dialog.data.source, "lot") + currentGroupsSummary([]),
-    "Введите слова через запятую, например: Минск, авто");
+    "Введите слова через запятую, например: Минск, авто", dialog, env, userId);
 }
 
 /**
@@ -51,21 +52,49 @@ async function proceedToLotKeywords(token, chatId, msgId, userId, dialog, env) {
  * отправляет новое с force_reply — Telegram автоматически
  * фокусирует поле ввода с подсказкой над ним.
  */
-async function promptKeywordsInput(token, chatId, msgId, promptText, placeholder) {
+/**
+ * Показывает приглашение ввести ключевые слова.
+ * При наличии msgId — редактирует сообщение и шлёт force_reply,
+ * сохраняя его ID в dialog.data.kwForceReplyMsgId для последующего удаления.
+ */
+async function promptKeywordsInput(token, chatId, msgId, promptText, placeholder, dialog, env, userId) {
   if (msgId) {
-    // Редактируем существующее сообщение + шлём force_reply
     await editMessage(token, chatId, msgId, promptText, { reply_markup: inlineKeywordsSkip() });
-    return sendMessage(token, chatId, `✏️ <i>Введите ответ в поле ниже:</i>`, {
+    const frMsg = await sendMessage(token, chatId, `✏️ <i>Введите ответ в поле ниже:</i>`, {
       reply_markup: {
         force_reply:             true,
         input_field_placeholder: placeholder || "Слова через запятую...",
         selective:               true,
       },
     });
+    if (dialog && frMsg?.result?.message_id) {
+      dialog.data.kwForceReplyMsgId = frMsg.result.message_id;
+      await saveDialog(env, userId, dialog);
+    }
+    return frMsg;
   } else {
-    // Просто новое сообщение с кнопкой «Пропустить» — force_reply уже был
     return sendMessage(token, chatId, promptText, { reply_markup: inlineKeywordsSkip() });
   }
+}
+
+/** Удаляет висящее force_reply сообщение ввода ключевых слов если оно есть. */
+async function clearKeywordsForceReply(token, chatId, dialog) {
+  const id = dialog.data.kwForceReplyMsgId;
+  if (id) {
+    await deleteMessage(token, chatId, id).catch(() => {});
+    delete dialog.data.kwForceReplyMsgId;
+  }
+}
+
+/**
+ * Отправляет экран выбора типов совпадений в два сообщения:
+ * 1. Описание типов (текст) — пользователь читает его
+ * 2. Кнопки выбора — в фокусе, сразу доступны
+ * Так описание остаётся видимым над кнопками без скролла.
+ */
+async function sendWordTypeScreen(token, chatId, helpText, summaryText, keyboard) {
+  await sendMessage(token, chatId, helpText);
+  return sendMessage(token, chatId, summaryText, { reply_markup: keyboard });
 }
 
 // ── Начало диалога ────────────────────────────────────────────
@@ -135,7 +164,7 @@ export async function handleCallback(token, update, env) {
       await saveDialog(env, userId, dialog);
       return promptKeywordsInput(token, chatId, msgId,
         keywordsPromptText("rechitsa") + currentGroupsSummary(dialog.data.keywordGroups),
-        "Например: склад, Минск, авто");
+        "Например: склад, Минск, авто", dialog, env, userId);
     }
 
     if (source === "torgigov") {
@@ -187,7 +216,7 @@ export async function handleCallback(token, update, env) {
         await saveDialog(env, userId, dialog);
         return promptKeywordsInput(token, chatId, msgId,
         keywordsPromptText("multi") + currentGroupsSummary([]),
-        "Например: склад, Минск, авто");
+        "Например: склад, Минск, авто", dialog, env, userId);
       }
     }
 
@@ -208,7 +237,7 @@ export async function handleCallback(token, update, env) {
       await saveDialog(env, userId, dialog);
       return promptKeywordsInput(token, chatId, msgId,
         keywordsPromptText("multi", "lot") + currentGroupsSummary([]),
-        "Например: склад, Минск, авто");
+        "Например: склад, Минск, авто", dialog, env, userId);
     }
     if (data === "sub_reg:words") {
       dialog.data.region = "keywords";
@@ -217,7 +246,7 @@ export async function handleCallback(token, update, env) {
       await saveDialog(env, userId, dialog);
       return promptKeywordsInput(token, chatId, msgId,
         keywordsPromptText("multi", "region") + currentGroupsSummary([]),
-        "Например: Гомель, Жлобин");
+        "Например: Гомель, Жлобин", dialog, env, userId);
     }
     if (data === "sub_reg:oblast") {
       dialog.step = "multi_region_oblast";
@@ -228,15 +257,6 @@ export async function handleCallback(token, update, env) {
     }
   }
 
-  if (data.startsWith("sub_obl:") && dialog.step === "multi_region_oblast") {
-    dialog.data.region = [data.slice(8)];
-    dialog.step = "keywords_input";
-    dialog.data.keywordGroups = [];
-    await saveDialog(env, userId, dialog);
-    return promptKeywordsInput(token, chatId, msgId,
-        keywordsPromptText("multi", "lot") + currentGroupsSummary([]),
-        "Например: склад, Минск, авто");
-  }
 
   // ── torgigov: категории — ОТКЛЮЧЕНО ──────────────────────────
   // Шаг убран: подписка только по ключевым словам.
@@ -285,7 +305,7 @@ export async function handleCallback(token, update, env) {
     await saveDialog(env, userId, dialog);
     return promptKeywordsInput(token, chatId, msgId,
         keywordsPromptText(dialog.data.source, "lot") + currentGroupsSummary([]),
-        "Например: склад, Минск, авто");
+        "Например: склад, Минск, авто", dialog, env, userId);
   }
 
   if (data === "sub_reg:oblast") {
@@ -353,7 +373,7 @@ export async function handleCallback(token, update, env) {
     }
     return promptKeywordsInput(token, chatId, msgId,
       keywordsPromptText(dialog.data.source, "lot") + currentGroupsSummary([]),
-      "Например: склад, авто");
+      "Например: склад, авто", dialog, env, userId);
   }
 
   if (data === "sub_council:enter") {
@@ -374,7 +394,7 @@ export async function handleCallback(token, update, env) {
     await saveDialog(env, userId, dialog);
     return promptKeywordsInput(token, chatId, msgId,
         keywordsPromptText(dialog.data.source, "region") + currentGroupsSummary([]),
-        "Например: Гомель, Жлобин");
+        "Например: Гомель, Жлобин", dialog, env, userId);
   }
 
   // ── Ключевые слова: пропустить ────────────────────────────────
@@ -446,9 +466,10 @@ export async function handleCallback(token, update, env) {
     const wordTypes = {};
     group.forEach(w => { wordTypes[w.key] = w.type || "partial"; });
 
-    return editMessage(token, chatId, msgId,
-      wordTypesHelpText() + "\n\n" + groupSummaryText(group),
-      { reply_markup: inlineWordTypeChoice(dialog.data.currentFlatTokens, wordTypes, groupIdx) });
+    return sendWordTypeScreen(token, chatId,
+      wordTypesHelpText(),
+      groupSummaryText(group),
+      inlineWordTypeChoice(dialog.data.currentFlatTokens, wordTypes, groupIdx));
   }
 
   // ── Подтвердить типы слов ─────────────────────────────────────
@@ -464,6 +485,9 @@ export async function handleCallback(token, update, env) {
 
     delete dialog.data.currentFlatTokens;
     delete dialog.data.currentParsedParts;
+
+    // Удаляем висящий force_reply
+    await clearKeywordsForceReply(token, chatId, dialog);
 
     // В фазе региона — сразу переходим к ключевым словам лота
     if (dialog.data.keywordPhase === "region") {
@@ -561,9 +585,10 @@ export async function handleCallback(token, update, env) {
     group.forEach(w => { wordTypes[w.key] = w.type || "partial"; });
 
     await saveDialog(env, userId, dialog);
-    return editMessage(token, chatId, msgId,
-      wordTypesHelpText() + "\n\n" + groupSummaryText(group),
-      { reply_markup: inlineWordTypeChoice(dialog.data.currentFlatTokens, wordTypes, gIdx) });
+    return sendWordTypeScreen(token, chatId,
+      wordTypesHelpText(),
+      groupSummaryText(group),
+      inlineWordTypeChoice(dialog.data.currentFlatTokens, wordTypes, gIdx));
   }
 }
 
@@ -589,6 +614,7 @@ export async function handleTextInDialog(token, chatId, userId, text, env) {
   }
 
   if (dialog.step === "keywords_input" || dialog.step === "region_keywords_input") {
+    await clearKeywordsForceReply(token, chatId, dialog);
     const parsed = parseGroupInput(text);
     if (parsed.length === 0) {
       return sendMessage(token, chatId, "⚠️ Введите хотя бы одно слово.");
@@ -614,9 +640,10 @@ export async function handleTextInDialog(token, chatId, userId, text, env) {
     group.forEach(w => { wordTypes[w.key] = "partial"; });
 
     await saveDialog(env, userId, dialog);
-    return sendMessage(token, chatId,
-      wordTypesHelpText() + "\n\n" + groupSummaryText(group),
-      { reply_markup: inlineWordTypeChoice(flatTokensNew, wordTypes, groupIndex) });
+    return sendWordTypeScreen(token, chatId,
+      wordTypesHelpText(),
+      groupSummaryText(group),
+      inlineWordTypeChoice(flatTokensNew, wordTypes, groupIndex));
   }
 
   if (dialog.step === "region_council") {
