@@ -97,14 +97,13 @@ async function clearKeywordsForceReply(token, chatId, dialog) {
 }
 
 /**
- * Отправляет экран выбора типов совпадений в два сообщения:
- * 1. Описание типов (текст) — пользователь читает его
- * 2. Кнопки выбора — в фокусе, сразу доступны
- * Так описание остаётся видимым над кнопками без скролла.
+ * Отправляет экран выбора типов совпадений — одним сообщением.
+ * Описание и кнопки в одном сообщении: редактирование при смене галочки работает надёжно.
  */
 async function sendWordTypeScreen(token, chatId, helpText, summaryText, keyboard) {
-  await sendMessage(token, chatId, helpText);
-  return sendMessage(token, chatId, summaryText, { reply_markup: keyboard });
+  return sendMessage(token, chatId,
+    `${summaryText}\n\n${helpText}`,
+    { reply_markup: keyboard });
 }
 
 // ── Начало диалога ────────────────────────────────────────────
@@ -463,7 +462,13 @@ export async function handleCallback(token, update, env) {
     if (!groups[groupIdx]) {
       return answerCallback(token, cb.id, "Ошибка: группа не найдена");
     }
-    const flatToken = dialog.data.currentFlatTokens?.[tokenIdx];
+
+    // Для фазы council используем councilFlatTokens, иначе currentFlatTokens
+    const flatTokens = dialog.data.keywordPhase === "council"
+      ? dialog.data.councilFlatTokens
+      : dialog.data.currentFlatTokens;
+
+    const flatToken = flatTokens?.[tokenIdx];
     if (!flatToken) {
       return answerCallback(token, cb.id, "Ошибка: токен не найден");
     }
@@ -480,10 +485,10 @@ export async function handleCallback(token, update, env) {
     const wordTypes = {};
     group.forEach(w => { wordTypes[w.key] = w.type || "partial"; });
 
-    return sendWordTypeScreen(token, chatId,
-      wordTypesHelpText(),
-      groupSummaryText(group),
-      inlineWordTypeChoice(dialog.data.currentFlatTokens, wordTypes, groupIdx));
+    // editMessage — обновляем существующее сообщение (галочки переключаются на месте)
+    return editMessage(token, chatId, msgId,
+      `${groupSummaryText(group)}\n\n${wordTypesHelpText()}`,
+      { reply_markup: inlineWordTypeChoice(flatTokens, wordTypes, groupIdx) });
   }
 
   // ── Подтвердить типы слов ─────────────────────────────────────
@@ -597,8 +602,8 @@ export async function handleCallback(token, update, env) {
       return answerCallback(token, cb.id, "Ошибка: группа не найдена");
     }
 
-    const group = groups[gIdx];
-    dialog.data.currentFlatTokens = group.map(w => ({
+    const group     = groups[gIdx];
+    const flatTokens = group.map(w => ({
       key:         w.key,
       displayWord: w.word,
       fullPhrase:  w.phraseGroup || w.word,
@@ -607,6 +612,13 @@ export async function handleCallback(token, update, env) {
       wordIdx:     0,
     }));
 
+    // Сохраняем токены в правильное поле в зависимости от фазы
+    if (dialog.data.keywordPhase === "council") {
+      dialog.data.councilFlatTokens = flatTokens;
+    } else {
+      dialog.data.currentFlatTokens = flatTokens;
+    }
+
     const wordTypes = {};
     group.forEach(w => { wordTypes[w.key] = w.type || "partial"; });
 
@@ -614,7 +626,7 @@ export async function handleCallback(token, update, env) {
     return sendWordTypeScreen(token, chatId,
       wordTypesHelpText(),
       groupSummaryText(group),
-      inlineWordTypeChoice(dialog.data.currentFlatTokens, wordTypes, gIdx));
+      inlineWordTypeChoice(flatTokens, wordTypes, gIdx));
   }
 }
 
