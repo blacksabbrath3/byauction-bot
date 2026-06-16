@@ -734,8 +734,7 @@ export async function handleTextInDialog(token, chatId, userId, text, env) {
     await saveDialog(env, userId, dialog);
     return sendWordTypeScreen(token, chatId,
       wordTypesHelpText(),
-      groups.map(g => groupSummaryText(g)).join(" <i>или</i>
-"),
+      groups.map(g => groupSummaryText(g)).join(" <i>или</i>\n"),
       inlineWordTypeChoice(allFlatTokens, wordTypes, 0));
   }
 
