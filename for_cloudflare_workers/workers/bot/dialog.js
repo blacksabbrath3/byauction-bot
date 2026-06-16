@@ -18,7 +18,7 @@ import {
   shortUUID, subSummary,
   categoryStepText, maxPricePromptText, keywordsPromptText,
   wordTypesHelpText, customPatternHelpText,
-  currentGroupsSummary, groupSummaryText,
+  currentGroupsSummary, groupSummaryText, formatKeywordGroups,
 } from "./steps.js";
 import { parseGroupInput, buildFlatTokens } from "./keywords.js";
 
@@ -42,6 +42,29 @@ function activeGroups(dialog) {
 async function proceedAfterCouncil(token, chatId, msgId, userId, dialog, env) {
   delete dialog.data.councilFlatTokens;
   return proceedToLotKeywords(token, chatId, msgId, userId, dialog, env);
+}
+
+/** Завершает фазу lot-ключевых слов: переходит к max_price или сразу к финишу подписки. */
+async function finishKeywordGroups(token, chatId, msgId, userId, dialog, env) {
+  dialog.data.keywords = dialog.data.keywordGroups || [];
+  const src = dialog.data.source;
+
+  if (src === "rechitsa" || src === "butb" || src === "multi" || src === "torgigov") {
+    dialog.data.max_price = 0;
+    const categories = await getCategories(env);
+    return finishSubscription(token, chatId, userId, msgId, dialog, env, categories);
+  }
+
+  dialog.step = "max_price";
+  await saveDialog(env, userId, dialog);
+  await editMessage(token, chatId, msgId,
+    maxPricePromptText(src), { reply_markup: inlineMaxPriceSkip() });
+  const frMsg = await sendMessage(token, chatId, `✏️ <i>Введите число, например: <code>5000</code></i>`, {
+    reply_markup: { force_reply: true, input_field_placeholder: "Введите сумму в BYN...", selective: true },
+  });
+  dialog.data.priceForceReplyMsgId = frMsg?.result?.message_id;
+  await saveDialog(env, userId, dialog);
+  return frMsg;
 }
 
 /** После завершения ввода региональных ключевых слов переходим к лот-ключевым. */
@@ -389,9 +412,7 @@ export async function handleCallback(token, update, env) {
     dialog.step = "region_council";
     await saveDialog(env, userId, dialog);
     await editMessage(token, chatId, msgId,
-      `📍 <b>Населённый пункт</b>\n\nВведите названия населённых пунктов через запятую
-
-(можно несклоняемую часть слова, например: <code>Тереховк</code> вместо «Тереховка»/<wbr>«Тереховский»):`,
+      `📍 <b>Населённый пункт</b>\n\nВведите название населённых пунктов через запятую (можно несклоняемую часть слова):`,
       { reply_markup: { inline_keyboard: [[{ text: "⏭ Пропустить", callback_data: "sub_council:skip" }, { text: "❌ Отмена", callback_data: "sub_cancel" }]] } });
     return sendMessage(token, chatId, `✏️ <i>Введите названия через запятую:</i>`, {
       reply_markup: { force_reply: true, input_field_placeholder: "Тереховка, Черёмуха, ...", selective: true },
@@ -540,8 +561,7 @@ export async function handleCallback(token, update, env) {
 
     await saveDialog(env, userId, dialog);
     return editMessage(token, chatId, msgId,
-      `📝 <b>Группа ${groupIdx + 1} сохранена</b>\n\n` +
-      groupSummaryText(group) +
+      `✅ <b>Группа ${groupIdx + 1} готова:</b> ${formatKeywordGroups([group])}` +
       currentGroupsSummary(groups),
       { reply_markup: inlineAddMoreGroups(groups.length) });
   }
@@ -574,29 +594,7 @@ export async function handleCallback(token, update, env) {
     if (dialog.data.keywordPhase === "council") {
       return proceedAfterCouncil(token, chatId, msgId, userId, dialog, env);
     }
-
-    dialog.data.keywords = dialog.data.keywordGroups || [];
-    const src = dialog.data.source;
-    if (src === "rechitsa" || src === "butb" || src === "multi") {
-      dialog.data.max_price = 0;
-      const categories = await getCategories(env);
-      return finishSubscription(token, chatId, userId, msgId, dialog, env, categories);
-    }
-    if (src === "torgigov") {
-      dialog.data.max_price = 0;
-      const categories = await getCategories(env);
-      return finishSubscription(token, chatId, userId, msgId, dialog, env, categories);
-    }
-    dialog.step = "max_price";
-    await saveDialog(env, userId, dialog);
-    await editMessage(token, chatId, msgId,
-      maxPricePromptText(src), { reply_markup: inlineMaxPriceSkip() });
-    const frMsg = await sendMessage(token, chatId, `✏️ <i>Введите число, например: <code>5000</code></i>`, {
-      reply_markup: { force_reply: true, input_field_placeholder: "Введите сумму в BYN...", selective: true },
-    });
-    dialog.data.priceForceReplyMsgId = frMsg?.result?.message_id;
-    await saveDialog(env, userId, dialog);
-    return frMsg;
+    return finishKeywordGroups(token, chatId, msgId, userId, dialog, env);
   }
 
   // ── Расширенный поиск ─────────────────────────────────────────
