@@ -154,9 +154,7 @@ export function inlineAfterDistrict() {
 export function inlineWordTypeChoice(flatTokens, wordTypes, groupIndex) {
   const rows = [];
 
-  // Быстрый путь — сразу принять группу с настройками "частичное" по умолчанию
-  rows.push([{ text: "✅ Использовать как есть", callback_data: `sub_wt_done|${groupIndex}` }]);
-  rows.push([{ text: "⚙️ Настроить точнее ↓", callback_data: "noop" }]);
+  rows.push([{ text: "ℹ️ О точности совпадений", callback_data: "noop" }]);
 
   let lastPhrase = null;
 

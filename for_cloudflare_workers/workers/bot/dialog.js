@@ -559,11 +559,9 @@ export async function handleCallback(token, update, env) {
       return proceedAfterCouncil(token, chatId, msgId, userId, dialog, env);
     }
 
+    // Сразу переходим к завершению — без промежуточного экрана "Группа сохранена"
     await saveDialog(env, userId, dialog);
-    return editMessage(token, chatId, msgId,
-      `✅ <b>Группа ${groupIdx + 1} готова:</b> ${formatKeywordGroups([group])}` +
-      currentGroupsSummary(groups),
-      { reply_markup: inlineAddMoreGroups(groups.length) });
+    return finishKeywordGroups(token, chatId, msgId, userId, dialog, env);
   }
 
   // ── Добавить ещё группу ───────────────────────────────────────
