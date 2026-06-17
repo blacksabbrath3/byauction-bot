@@ -48,15 +48,26 @@ async function finishKeywordGroups(token, chatId, msgId, userId, dialog, env) {
   dialog.data.keywords = dialog.data.keywordGroups || [];
   const src = dialog.data.source;
 
-  if (src === "rechitsa" || src === "butb" || src === "multi" || src === "torgigov") {
+  // rechitsa и butb не поддерживают max_price вообще (нет цены в структуре лота)
+  if (src === "rechitsa" || src === "butb") {
     dialog.data.max_price = 0;
     return finishSubscription(token, chatId, userId, msgId, dialog, env);
   }
 
+  // eauction, torgigov, multi — спрашиваем максимальную цену
+  return promptMaxPrice(token, chatId, msgId, userId, dialog, env);
+}
+
+/**
+ * Показывает запрос максимальной цены.
+ * Гарантированно чистит предыдущий force_reply (от ключевых слов) перед отправкой нового.
+ */
+async function promptMaxPrice(token, chatId, msgId, userId, dialog, env) {
+  await clearKeywordsForceReply(token, chatId, dialog);
   dialog.step = "max_price";
   await saveDialog(env, userId, dialog);
   await editMessage(token, chatId, msgId,
-    maxPricePromptText(src), { reply_markup: inlineMaxPriceSkip() });
+    maxPricePromptText(dialog.data.source), { reply_markup: inlineMaxPriceSkip() });
   const frMsg = await sendMessage(token, chatId, `✏️ <i>Введите число, например: <code>5000</code></i>`, {
     reply_markup: { force_reply: true, input_field_placeholder: "Введите сумму в BYN...", selective: true },
   });
@@ -429,26 +440,9 @@ export async function handleCallback(token, update, env) {
       return proceedAfterCouncil(token, chatId, msgId, userId, dialog, env);
     }
 
-    // Фаза "lot" — завершаем подписку
-    dialog.data.keywords = dialog.data.keywordGroups || [];
-    if (dialog.data.source === "rechitsa") {
-      dialog.data.max_price = 0;
-      return finishSubscription(token, chatId, userId, msgId, dialog, env);
-    }
-    if (dialog.data.source === "butb" || dialog.data.source === "multi" || dialog.data.source === "torgigov") {
-      dialog.data.max_price = 0;
-      return finishSubscription(token, chatId, userId, msgId, dialog, env);
-    }
-    dialog.step = "max_price";
-    await saveDialog(env, userId, dialog);
-    await editMessage(token, chatId, msgId,
-      maxPricePromptText(dialog.data.source), { reply_markup: inlineMaxPriceSkip() });
-    const frMsg = await sendMessage(token, chatId, `✏️ <i>Введите число, например: <code>5000</code></i>`, {
-      reply_markup: { force_reply: true, input_field_placeholder: "Введите сумму в BYN...", selective: true },
-    });
-    dialog.data.priceForceReplyMsgId = frMsg?.result?.message_id;
-    await saveDialog(env, userId, dialog);
-    return frMsg;
+    // Фаза "lot" — завершаем ввод ключевых слов (без слов вообще)
+    dialog.data.keywordGroups = [];
+    return finishKeywordGroups(token, chatId, msgId, userId, dialog, env);
   }
 
   // ── Максимальная цена: пропустить ─────────────────────────────
