@@ -10,7 +10,7 @@
  */
 
 import { tgCall, sendMessage } from "../../shared/telegram.js";
-import { getSubs, saveSubs, getCategories } from "./kv.js";
+import { saveSubs } from "./kv.js";
 import { mainReplyKeyboard } from "./keyboards.js";
 import { helpText } from "./steps.js";
 import {
@@ -68,8 +68,7 @@ async function handleTelegramUpdate(update, env) {
     return startSubscribeDialog(token, chatId, userId, env);
 
   if (text === "/list" || text === "📋 Мои подписки") {
-    const categories = await getCategories(env);
-    return sendListMessage(token, chatId, userId, env, categories);
+    return sendListMessage(token, chatId, userId, env);
   }
 
   if (text === "/unsubscribe_all" || text === "🗑 Удалить все подписки") {
@@ -125,6 +124,4 @@ export default {
       return new Response("OK");
     }
   },
-
-  async scheduled(event, env, ctx) {},
 };
