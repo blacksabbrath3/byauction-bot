@@ -25,8 +25,12 @@ jobs:
           workingDirectory: for_cloudflare_workers/workers/bot
       - name: Register Telegram webhook
         run: |
+          if [ -z "${{ secrets.CF_ACCOUNT_SUBDOMAIN }}" ]; then
+            echo "::warning::CF_ACCOUNT_SUBDOMAIN secret is not set — skipping webhook registration. Set it in repo Settings → Secrets → Actions."
+            exit 0
+          fi
           sleep 5
-          curl -s "https://bot-worker.${{ secrets.CF_ACCOUNT_SUBDOMAIN }}.workers.dev/set-webhook"
+          curl -sf "https://bot-worker.${{ secrets.CF_ACCOUNT_SUBDOMAIN }}.workers.dev/set-webhook"
         continue-on-error: true
 
   deploy-eauction:
