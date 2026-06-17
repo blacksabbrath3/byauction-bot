@@ -28,7 +28,6 @@ import { matchRegion }                         from "../../shared/region.js";
 // ── Константы ──────────────────────────────────────────────
 
 const TORGI_API   = "https://api.torgi.gov.by/api";
-const TORGI_SITE  = "https://torgi.gov.by";
 
 const API_HEADERS = {
   "User-Agent":  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
@@ -102,48 +101,6 @@ function resolveCategory(catId, slug) {
   return "";
 }
 
-// ── Цена ───────────────────────────────────────────────────
-
-function formatPrice(val) {
-  if (val == null || val === "") return "";
-  const num = parseFloat(String(val).replace(/\s/g, "").replace(",", "."));
-  if (isNaN(num)) return String(val);
-  return num.toLocaleString("ru-RU", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + " BYN";
-}
-
-// ── Lot URL ────────────────────────────────────────────────
-
-function makeLotUrl(lotId, auctionId, slug) {
-  const path = slug ? `/${slug}` : "";
-  return `${TORGI_SITE}/lot/${lotId}/${auctionId}${path}`;
-}
-
-// ── Нормализация лота из API JSON ──────────────────────────
-
-function normalizeLot(raw, categorySlug) {
-  // Типичные поля API (выясним точную структуру из первого реального ответа,
-  // здесь поддерживаем несколько вариантов именования полей)
-  const lotId     = raw.id       ?? raw.lotId    ?? raw.lot_id    ?? "";
-  const auctionId = raw.auctionId ?? raw.auction_id ?? raw.saleId ?? "";
-  const title     = raw.name     ?? raw.title    ?? raw.lotName   ?? "";
-  const category  = raw.categoryName ?? raw.category ?? raw.categoryTitle ?? "";
-  const region    = raw.regionName   ?? raw.region   ?? raw.regionTitle   ?? "";
-  const location  = raw.address      ?? raw.location ?? raw.lotAddress    ?? "";
-  const price     = raw.startPrice   ?? raw.price    ?? raw.startCost     ?? raw.initialPrice ?? "";
-  const urlSlug   = raw.urlName      ?? raw.slug     ?? raw.nameUrl       ?? "";
-
-  return {
-    lot_id:   String(lotId),
-    url:      makeLotUrl(lotId, auctionId, urlSlug),
-    slug:     categorySlug || "",
-    title:    String(title),
-    category: String(category),
-    region:   String(region),
-    location: String(location),
-    price:    formatPrice(price),
-  };
-}
-
 // ── Матчинг подписки ───────────────────────────────────────
 
 function matchLot(lot, sub) {
@@ -154,13 +111,7 @@ function matchLot(lot, sub) {
     return false;
   }
 
-  if (sub.categories?.length > 0) {
-    const lotSlug = lot.slug || "";
-    const lotCat  = (lot.category || "").toLowerCase();
-    if (!sub.categories.some(s => lotSlug === s || lotCat.includes(s.replace(/-/g, " ")))) {
-      return false;
-    }
-  }
+  // Категории — ОТКЛЮЧЕНО (бот больше не собирает sub.categories)
 
   const lotLocationText = resolveRegion(lot.region) + " " + (lot.location || "");
   if (!matchRegion(sub.region, lotLocationText, sub.regionKeywords, sub)) return false;
