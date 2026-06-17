@@ -400,9 +400,12 @@ export async function handleCallback(token, update, env) {
     await editMessage(token, chatId, msgId,
       `📍 <b>Населённый пункт</b>\n\nВведите название населённых пунктов через запятую (можно несклоняемую часть слова):`,
       { reply_markup: { inline_keyboard: [[{ text: "⏭ Пропустить", callback_data: "sub_council:skip" }, { text: "❌ Отмена", callback_data: "sub_cancel" }]] } });
-    return sendMessage(token, chatId, `✏️ <i>Введите названия через запятую:</i>`, {
+    const frMsg = await sendMessage(token, chatId, `✏️ <i>Введите названия через запятую:</i>`, {
       reply_markup: { force_reply: true, input_field_placeholder: "Тереховка, Черёмуха, ...", selective: true },
     });
+    dialog.data.kwForceReplyMsgId = frMsg?.result?.message_id;
+    await saveDialog(env, userId, dialog);
+    return frMsg;
   }
 
   if (data === "sub_reg:words") {
@@ -684,6 +687,7 @@ export async function handleTextInDialog(token, chatId, userId, text, env) {
   }
 
   if (dialog.step === "region_council") {
+    await clearKeywordsForceReply(token, chatId, dialog);
     const parsed = parseGroupInput(text);
     if (parsed.length === 0) {
       return sendMessage(token, chatId, "⚠️ Введите хотя бы одно название.");
@@ -740,6 +744,14 @@ export async function handleTextInDialog(token, chatId, userId, text, env) {
 // ── finishSubscription ────────────────────────────────────────
 
 export async function finishSubscription(token, chatId, userId, msgId, dialog, env) {
+  // Гарантированно убираем любые висящие force_reply сообщения перед финишем —
+  // независимо от того, через какой путь дошли до завершения подписки.
+  await clearKeywordsForceReply(token, chatId, dialog);
+  if (dialog.data.priceForceReplyMsgId) {
+    await deleteMessage(token, chatId, dialog.data.priceForceReplyMsgId).catch(() => {});
+    delete dialog.data.priceForceReplyMsgId;
+  }
+
   const subs = await getSubs(env, userId);
   if (subs.length >= MAX_SUBS) {
     await deleteDialog(env, userId);
