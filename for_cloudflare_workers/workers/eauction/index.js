@@ -9,7 +9,6 @@
 
 import { matchKeywords }                        from "../../shared/matchKeyword.js";
 import { sendNotifications }                    from "../../shared/subscribers.js";
-import { tgSend }                               from "../../shared/telegram.js";
 import { escapeHtml, jsonResponse, checkAuth }  from "../../shared/format.js";
 import { matchRegion }                          from "../../shared/region.js";
 
@@ -60,9 +59,6 @@ function matchLot(lot, sub) {
   if (!types.includes("auction") && !types.includes("fixed")) return false;
   if (!types.includes("auction") &&  isAuction) return false;
   if (!types.includes("fixed")   && !isAuction) return false;
-
-  // Категории — ОТКЛЮЧЕНО
-  // if (sub.categories?.length > 0) { ... }
 
   if (!matchRegion(sub.region, lot.location, sub.regionKeywords, sub)) return false;
 
