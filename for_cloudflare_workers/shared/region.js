@@ -73,34 +73,54 @@ export function regionLabel(r) {
 // ── Матчинг ───────────────────────────────────────────────────
 
 /**
- * Возвращает основу слова для нечёткого совпадения:
- * отрезает последние 3 буквы (но не меньше 4 символов остатка).
+ * Нечёткий матчинг гео-названия с учётом склонений.
+ * Снимает адъективные окончания: "Речицкий"→"Речиц", "Жлобинский"→"Жлобин".
+ * После основы разрешаем 0–5 любых кириллических символов.
+ * Логика ИЛИ: вызывающий код использует .some() по массиву токенов.
  */
 export function stemGeo(word) {
-  const s = word.toLowerCase().trim();
-  return s.length > 6 ? s.slice(0, -3) : s;
+  const s = word.trim();
+  const endings = [
+    "ского","ской","скому","ским","ское","ских",
+    "ский","ская",
+    "кого","ком","кой","ких","кому","ким",
+    "кий","кая","кое","кие",
+    "ого","ой","ому","им","ые","ий","ая","ое",
+  ];
+  for (const end of endings) {
+    if (s.toLowerCase().endsWith(end) && s.length - end.length >= 3) {
+      return s.slice(0, s.length - end.length);
+    }
+  }
+  // Для топонимов (Тереховка→Терехов, Гомель→Гомел):
+  if (s.length <= 5) return s;
+  return s.slice(0, -2);
 }
 
 /**
- * Проверяет попадание текста по одному гео-токену с нечётким совпадением.
- * Пример: stemGeo("Гомельская") = "гомел"
- *         → совпадёт с "Гомельского", "Гомельской", "Гомеля"
+ * Проверяет попадание текста по одному гео-токену.
+ * После основы допускаем 0–5 любых кириллических символов.
  */
 export function matchGeoToken(locationText, token) {
   const stem = stemGeo(token);
-  return locationText.toLowerCase().includes(stem);
+  const pattern = new RegExp(
+    stem.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '[а-яёА-ЯЁ]{0,5}',
+    'i'
+  );
+  return pattern.test(locationText);
 }
 
 /**
  * Проверяет подходит ли locationText под регион подписки.
  *
  * sub.region:
- *   "all"                → всегда true
- *   "keywords"           → матчинг через sub.regionKeywords (matchKeywords)
- *   ["Гомельская"]       → нечёткий матчинг по стемам названий
+ *   "all"               → всегда true
+ *   "keywords"          → матчинг через sub.regionKeywords (matchKeywords)
+ *   ["Гомельская"]      → нечёткий матчинг по стемам
  *
- * sub.regionDistricts:   массив строк — районы (нечёткий матчинг)
- * sub.regionCouncil:     строка — сельсовет/горсовет (точное вхождение)
+ * sub.regionDistricts:     массив строк — районы (нечёткий, ИЛИ)
+ * sub.regionCouncilGroups: группы ключевых слов населённого пункта
+ *                          (matchKeywords, поддерживает типы partial/exact/extended/custom)
  */
 export function matchRegion(region, locationText, regionKeywords, sub) {
   if (!region || region === "all") return true;
@@ -112,22 +132,20 @@ export function matchRegion(region, locationText, regionKeywords, sub) {
     return matchKeywords(loc, regionKeywords);
   }
 
-  // Область — нечёткий матчинг
+  // Область — нечёткий матчинг (ИЛИ)
   const regions = Array.isArray(region) ? region : [region];
-  const oblastMatch = regions.some(r => matchGeoToken(loc, r));
-  if (!oblastMatch) return false;
+  if (!regions.some(r => matchGeoToken(loc, r))) return false;
 
-  // Районы — если выбраны, хотя бы один должен совпасть
+  // Районы — хотя бы один совпадает (ИЛИ)
   const districts = sub?.regionDistricts;
   if (districts?.length > 0) {
-    const districtMatch = districts.some(d => matchGeoToken(loc, d));
-    if (!districtMatch) return false;
+    if (!districts.some(d => matchGeoToken(loc, d))) return false;
   }
 
-  // Сельсовет — если указан, должен встречаться (частичное совпадение)
-  const council = sub?.regionCouncil;
-  if (council) {
-    if (!loc.includes(council.toLowerCase().trim())) return false;
+  // Населённый пункт — через matchKeywords с поддержкой типов совпадений
+  const councilGroups = sub?.regionCouncilGroups;
+  if (councilGroups?.length > 0) {
+    if (!matchKeywords(loc, councilGroups)) return false;
   }
 
   return true;

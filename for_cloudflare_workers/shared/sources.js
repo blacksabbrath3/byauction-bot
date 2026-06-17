@@ -12,28 +12,24 @@ export const SOURCES = [
     label:       "🏛 e-auction.by",
     description: "Торги — аукционы и продажа по фиксированной цене",
     hasRegion:   true,
-    hasKeywords: true,
   },
   {
     id:          "torgigov",
     label:       "🏦 torgi.gov.by",
     description: "Государственная торговая площадка",
     hasRegion:   true,
-    hasKeywords: true,
   },
   {
     id:          "butb",
     label:       "🏗 БУТБ (et.butb.by)",
     description: "Имущество — недвижимость, транспорт, оборудование",
     hasRegion:   true,
-    hasKeywords: true,
   },
   {
     id:          "rechitsa",
     label:       "🏙 Речицкий райисполком",
     description: "Аренда и покупка недвижимости",
     hasRegion:   false,
-    hasKeywords: true,
   },
 ];
 

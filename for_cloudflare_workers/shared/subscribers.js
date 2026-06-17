@@ -1,4 +1,3 @@
-import { matchKeywords } from "./matchKeyword.js";
 import { tgSend } from "./telegram.js";
 
 export async function getSubscriberList(SUBSCRIBERS) {
