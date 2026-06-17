@@ -6,7 +6,6 @@ import { sendMessage, editMessage, answerCallback, deleteMessage } from "../../s
 import { sourceById } from "../../shared/sources.js";
 import {
   getSubs, saveSubs, getDialog, saveDialog, deleteDialog,
-  getCategories,
 } from "./kv.js";
 import {
   MAX_KEYWORD_GROUPS,
@@ -16,9 +15,9 @@ import {
 } from "./keyboards.js";
 import {
   shortUUID, subSummary,
-  categoryStepText, maxPricePromptText, keywordsPromptText,
+  maxPricePromptText, keywordsPromptText,
   wordTypesHelpText, customPatternHelpText,
-  currentGroupsSummary, groupSummaryText, formatKeywordGroups,
+  currentGroupsSummary, groupSummaryText,
 } from "./steps.js";
 import { parseGroupInput, buildFlatTokens } from "./keywords.js";
 
@@ -51,8 +50,7 @@ async function finishKeywordGroups(token, chatId, msgId, userId, dialog, env) {
 
   if (src === "rechitsa" || src === "butb" || src === "multi" || src === "torgigov") {
     dialog.data.max_price = 0;
-    const categories = await getCategories(env);
-    return finishSubscription(token, chatId, userId, msgId, dialog, env, categories);
+    return finishSubscription(token, chatId, userId, msgId, dialog, env);
   }
 
   dialog.step = "max_price";
@@ -165,8 +163,7 @@ export async function handleCallback(token, update, env) {
     if (idx === -1) return editMessage(token, chatId, msgId, "⚠️ Подписка не найдена.");
     subs.splice(idx, 1);
     await saveSubs(env, userId, subs);
-    const categories = await getCategories(env);
-    return sendListMessage(token, chatId, userId, env, categories, msgId);
+    return sendListMessage(token, chatId, userId, env, msgId);
   }
 
   if (data === "noop") return;
@@ -200,8 +197,6 @@ export async function handleCallback(token, update, env) {
     }
 
     if (source === "torgigov") {
-      // Категории torgigov — ОТКЛЮЧЕНО, подписка только по ключевым словам
-      dialog.data.categories = [];
       dialog.step = "region";
       await saveDialog(env, userId, dialog);
       return editMessage(token, chatId, msgId,
@@ -290,10 +285,6 @@ export async function handleCallback(token, update, env) {
   }
 
 
-  // ── torgigov: категории — ОТКЛЮЧЕНО ──────────────────────────
-  // Шаг убран: подписка только по ключевым словам.
-  // if (data.startsWith("sub_tgc:") && dialog.step === "torgigov_categories") { ... }
-
   // ── eauction: тип лота (чекбоксы, можно выбрать оба) ─────────
   if (data.startsWith("sub_t:") && dialog.step === "type") {
     const val = data.slice(6);
@@ -307,7 +298,6 @@ export async function handleCallback(token, update, env) {
         return;
       }
       dialog.data.type       = sel; // ["auction"] | ["fixed"] | ["auction","fixed"]
-      dialog.data.categories = []; // категории не собираем
       dialog.step            = "region";
       await saveDialog(env, userId, dialog);
       return editMessage(token, chatId, msgId,
@@ -324,10 +314,6 @@ export async function handleCallback(token, update, env) {
       `📋 <b>Новая подписка — e-auction.by</b>\n\nШаг 1 из 2 — Что отслеживать? (можно выбрать оба):`,
       { reply_markup: inlineTypeChoice(sel) });
   }
-
-  // ── eauction: категории — ОТКЛЮЧЕНО ──────────────────────────
-  // Шаг убран: подписка только по ключевым словам.
-  // if (data.startsWith("sub_c:") && dialog.step === "categories") { ... }
 
   // ── Регион (общий для eauction, butb, torgigov) ───────────────
   if (data === "sub_reg:all") {
@@ -444,13 +430,11 @@ export async function handleCallback(token, update, env) {
     dialog.data.keywords = dialog.data.keywordGroups || [];
     if (dialog.data.source === "rechitsa") {
       dialog.data.max_price = 0;
-      const categories = await getCategories(env);
-      return finishSubscription(token, chatId, userId, msgId, dialog, env, categories);
+      return finishSubscription(token, chatId, userId, msgId, dialog, env);
     }
     if (dialog.data.source === "butb" || dialog.data.source === "multi" || dialog.data.source === "torgigov") {
       dialog.data.max_price = 0;
-      const categories = await getCategories(env);
-      return finishSubscription(token, chatId, userId, msgId, dialog, env, categories);
+      return finishSubscription(token, chatId, userId, msgId, dialog, env);
     }
     dialog.step = "max_price";
     await saveDialog(env, userId, dialog);
@@ -471,8 +455,7 @@ export async function handleCallback(token, update, env) {
       await deleteMessage(token, chatId, dialog.data.priceForceReplyMsgId).catch(() => {});
       delete dialog.data.priceForceReplyMsgId;
     }
-    const categories = await getCategories(env);
-    return finishSubscription(token, chatId, userId, msgId, dialog, env, categories);
+    return finishSubscription(token, chatId, userId, msgId, dialog, env);
   }
 
   // ── Выбор типа совпадения слова ───────────────────────────────
@@ -748,8 +731,7 @@ export async function handleTextInDialog(token, chatId, userId, text, env) {
       await deleteMessage(token, chatId, dialog.data.priceForceReplyMsgId).catch(() => {});
       delete dialog.data.priceForceReplyMsgId;
     }
-    const categories = await getCategories(env);
-    return finishSubscription(token, chatId, userId, null, dialog, env, categories);
+    return finishSubscription(token, chatId, userId, null, dialog, env);
   }
 
   return null;
@@ -757,7 +739,7 @@ export async function handleTextInDialog(token, chatId, userId, text, env) {
 
 // ── finishSubscription ────────────────────────────────────────
 
-export async function finishSubscription(token, chatId, userId, msgId, dialog, env, categories) {
+export async function finishSubscription(token, chatId, userId, msgId, dialog, env) {
   const subs = await getSubs(env, userId);
   if (subs.length >= MAX_SUBS) {
     await deleteDialog(env, userId);
@@ -782,7 +764,7 @@ export async function finishSubscription(token, chatId, userId, msgId, dialog, e
     sub = { id: shortUUID(), source: "rechitsa",
             keywords: dialog.data.keywordGroups || [] };
   } else if (src === "torgigov") {
-    sub = { id: shortUUID(), source: "torgigov", categories: dialog.data.categories || [],
+    sub = { id: shortUUID(), source: "torgigov",
             region: dialog.data.region || "all", regionKeywords, regionDistricts, regionCouncilGroups,
             keywords: dialog.data.keywordGroups || [],
             max_price: dialog.data.max_price || 0 };
@@ -792,7 +774,7 @@ export async function finishSubscription(token, chatId, userId, msgId, dialog, e
             keywords: dialog.data.keywordGroups || [] };
   } else {
     sub = { id: shortUUID(), source: "eauction", type: dialog.data.type || "auction",
-            categories: dialog.data.categories || [], region: dialog.data.region || "keywords",
+            region: dialog.data.region || "keywords",
             regionKeywords, regionDistricts, regionCouncilGroups,
             keywords: dialog.data.keywordGroups || [], max_price: dialog.data.max_price || 0 };
   }
@@ -801,14 +783,14 @@ export async function finishSubscription(token, chatId, userId, msgId, dialog, e
   await saveSubs(env, userId, subs);
   await deleteDialog(env, userId);
 
-  const text = `✅ <b>Подписка создана:</b>\n\n${subSummary(sub, categories)}`;
+  const text = `✅ <b>Подписка создана:</b>\n\n${subSummary(sub)}`;
   if (msgId) return editMessage(token, chatId, msgId, text);
   return sendMessage(token, chatId, text);
 }
 
 // ── sendListMessage ───────────────────────────────────────────
 
-export async function sendListMessage(token, chatId, userId, env, categories, editMsgId = null) {
+export async function sendListMessage(token, chatId, userId, env, editMsgId = null) {
   const subs = await getSubs(env, userId);
   if (!subs.length) {
     const text = "📋 У вас нет активных подписок.\n\nСоздайте новую командой /subscribe";
@@ -818,7 +800,7 @@ export async function sendListMessage(token, chatId, userId, env, categories, ed
 
   const lines = ["📋 <b>Ваши подписки:</b>\n"];
   subs.forEach((sub, i) => {
-    lines.push(`${i + 1}. ${subSummary(sub, categories)}`);
+    lines.push(`${i + 1}. ${subSummary(sub)}`);
   });
 
   const keyboard = {
