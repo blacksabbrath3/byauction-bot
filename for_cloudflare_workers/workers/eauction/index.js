@@ -55,7 +55,13 @@ function matchLot(lot, sub) {
   }
 
   const isAuction = AUCTION_SECTIONS.includes(lot.section);
-  const types = Array.isArray(sub.type) ? sub.type : [sub.type || "auction"];
+
+  // Для multi-подписки тип задаётся через sub.eauctionTypes (выбран явно при подписке).
+  // Для прямой подписки на eauction — через sub.type (старый формат — строка или массив).
+  const types = sub.source === "multi"
+    ? (sub.eauctionTypes?.length > 0 ? sub.eauctionTypes : ["auction", "fixed"])
+    : (Array.isArray(sub.type) ? sub.type : [sub.type || "auction"]);
+
   if (!types.includes("auction") && !types.includes("fixed")) return false;
   if (!types.includes("auction") &&  isAuction) return false;
   if (!types.includes("fixed")   && !isAuction) return false;
