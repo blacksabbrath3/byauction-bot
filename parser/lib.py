@@ -22,6 +22,48 @@ SESSION.headers.update(cfg.REQUEST_HEADERS)
 
 
 # ════════════════════════════════════════════════════════════
+# ПРОКСИ ЧЕРЕЗ CLOUDFLARE WORKER
+# ════════════════════════════════════════════════════════════
+
+def _fetch_via_worker(url: str):
+    """
+    Запрашивает страницу через eauction-worker (POST /fetch-page).
+    Cloudflare IP не блокируется e-auction.by в отличие от GitHub Actions IP.
+    """
+    worker_url = getattr(cfg, "EAUCTION_WORKER_URL", None)
+    parser_secret = getattr(cfg, "PARSER_SECRET", None)
+    if not worker_url or not parser_secret:
+        return None
+
+    try:
+        r = SESSION.post(
+            f"{worker_url}/fetch-page",
+            json={"url": url},
+            headers={"X-API-Key": parser_secret, "Content-Type": "application/json"},
+            timeout=30,
+        )
+        r.raise_for_status()
+        data = r.json()
+        if not data.get("ok"):
+            print(f"  [!] Worker /fetch-page error: {data.get('error')}")
+            return None
+
+        class _ProxyResponse:
+            def __init__(self, html: str, status: int):
+                self.text        = html
+                self.status_code = status
+                self.content     = html.encode("utf-8")
+            def raise_for_status(self):
+                if self.status_code >= 400:
+                    raise requests.HTTPError(f"{self.status_code} Error from worker proxy")
+
+        return _ProxyResponse(data["html"], data.get("status", 200))
+    except Exception as e:
+        print(f"  [!] _fetch_via_worker({url}): {e}")
+        return None
+
+
+# ════════════════════════════════════════════════════════════
 # ССЫЛКИ — хранятся без "https://"
 # ════════════════════════════════════════════════════════════
 
@@ -69,6 +111,24 @@ def get_soup(url: str) -> BeautifulSoup | None:
             r = SESSION.get(url, timeout=cfg.REQUEST_TIMEOUT)
             r.raise_for_status()
             return BeautifulSoup(r.text, "html.parser")
+        except requests.HTTPError as e:
+            if e.response is not None and e.response.status_code == 403:
+                print(f"  [!] 403 — пробуем через Cloudflare Worker прокси…")
+                proxy_resp = _fetch_via_worker(url)
+                if proxy_resp is not None:
+                    try:
+                        proxy_resp.raise_for_status()
+                        return BeautifulSoup(proxy_resp.text, "html.parser")
+                    except Exception as pe:
+                        print(f"  [!] Прокси тоже вернул ошибку: {pe}")
+                else:
+                    print(f"  [!] Прокси недоступен")
+                return None
+            wait = cfg.RETRY_BASE_DELAY * attempt
+            print(f"  [!] Попытка {attempt}/{cfg.REQUEST_RETRIES}: {e}")
+            if attempt < cfg.REQUEST_RETRIES:
+                print(f"      Жду {wait:.0f}с…")
+                time.sleep(wait)
         except requests.RequestException as e:
             wait = cfg.RETRY_BASE_DELAY * attempt
             print(f"  [!] Попытка {attempt}/{cfg.REQUEST_RETRIES}: {e}")
@@ -575,10 +635,4 @@ def parse_lot_details(stored_path: str, section: str = "") -> dict:
     d["price"]    = _extract_price(soup)
     d["location"] = _extract_location(rows)
     d["area"]     = _extract_area(rows)
-    d["description"] = _extract_description(soup, d["location"], section)
-
-    if d["description"] and len(d["description"]) > cfg.DESCRIPTION_MAX_LEN:
-        d["description"] = d["description"][:cfg.DESCRIPTION_MAX_LEN] + "…"
-
-    return d
-    
+    d["description"] = _extract_description(soup, d["location"])
