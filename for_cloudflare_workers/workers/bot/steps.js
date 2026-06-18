@@ -22,14 +22,6 @@ export function wordMatchTypeLabel(type) {
   }
 }
 
-export function categoryLabels(categories, slugs) {
-  if (!slugs || slugs.length === 0) return "✅ Все категории";
-  return slugs.map(slug => {
-    const c = categories.find(x => x.slug === slug);
-    return c ? c.label : slug;
-  }).join(", ");
-}
-
 export function formatKeywordGroups(groups) {
   return groups.map(group =>
     group.map(w => {
@@ -60,15 +52,19 @@ function regionLine(sub) {
   return line;
 }
 
-export function subSummary(sub, categories) {
+export function subSummary(sub) {
   const kw = sub.keywords?.length > 0
     ? `<b>Ключевые слова:</b> ${formatKeywordGroups(sub.keywords)}`
     : "<b>Ключевые слова:</b> все уведомления";
 
   if (sub.source === "multi") {
-    const srcLabels = (sub.sources || [])
-      .map(id => sourceById(id)?.label || id)
-      .join(", ");
+    const srcLabels = (sub.sources || []).map(id => {
+      if (id === "eauction" && sub.eauctionTypes?.length > 0) {
+        const labels = sub.eauctionTypes.map(t => t === "fixed" ? "💰 Фикс. цена" : "🔨 Аукционы");
+        return `🏛 e-auction.by (${labels.join(", ")})`;
+      }
+      return sourceById(id)?.label || id;
+    }).join(", ");
     return [
       `🔀 <b>Несколько сайтов:</b> ${srcLabels}`,
       regionLine(sub),
@@ -120,13 +116,6 @@ function sourceHeader(source) {
     case "multi":    return "📋 <b>Новая подписка — несколько сайтов</b>";
     default:         return "📋 <b>Новая подписка — e-auction.by</b>";
   }
-}
-
-export function categoryStepText(selected, categories) {
-  const selLine = selected.length > 0
-    ? `\n\nВыбрано: ${selected.map(s => (categories.find(x => x.slug === s) || {}).label || s).join(", ")}`
-    : "";
-  return `📋 <b>Новая подписка — e-auction.by</b>\n\nВыберите категории (можно несколько):${selLine}\n\nНажмите «✔️ Готово» или «☑️ Все категории».`;
 }
 
 export function maxPricePromptText(source) {
