@@ -109,27 +109,30 @@ def get_soup(url: str) -> BeautifulSoup | None:
     for attempt in range(1, cfg.REQUEST_RETRIES + 1):
         try:
             r = SESSION.get(url, timeout=cfg.REQUEST_TIMEOUT)
-            r.raise_for_status()
-            return BeautifulSoup(r.text, "html.parser")
-        except requests.HTTPError as e:
-            if e.response is not None and e.response.status_code == 403:
-                print(f"  [!] 403 — пробуем через Cloudflare Worker прокси…")
-                proxy_resp = _fetch_via_worker(url)
-                if proxy_resp is not None:
-                    try:
-                        proxy_resp.raise_for_status()
-                        return BeautifulSoup(proxy_resp.text, "html.parser")
-                    except Exception as pe:
-                        print(f"  [!] Прокси тоже вернул ошибку: {pe}")
-                else:
-                    print(f"  [!] Прокси недоступен")
-                return None
+        except requests.RequestException as e:
             wait = cfg.RETRY_BASE_DELAY * attempt
             print(f"  [!] Попытка {attempt}/{cfg.REQUEST_RETRIES}: {e}")
             if attempt < cfg.REQUEST_RETRIES:
                 print(f"      Жду {wait:.0f}с…")
                 time.sleep(wait)
-        except requests.RequestException as e:
+            continue
+
+        if r.status_code == 403:
+            # e-auction.by блокирует GitHub Actions IP — переключаемся на прокси
+            print(f"  [!] 403 Forbidden — пробуем через Cloudflare Worker прокси…")
+            proxy_resp = _fetch_via_worker(url)
+            if proxy_resp is not None:
+                if proxy_resp.status_code < 400:
+                    return BeautifulSoup(proxy_resp.text, "html.parser")
+                print(f"  [!] Прокси вернул {proxy_resp.status_code}")
+            else:
+                print(f"  [!] Прокси недоступен (EAUCTION_WORKER_URL/PARSER_SECRET не заданы?)")
+            return None
+
+        try:
+            r.raise_for_status()
+            return BeautifulSoup(r.text, "html.parser")
+        except requests.HTTPError as e:
             wait = cfg.RETRY_BASE_DELAY * attempt
             print(f"  [!] Попытка {attempt}/{cfg.REQUEST_RETRIES}: {e}")
             if attempt < cfg.REQUEST_RETRIES:
