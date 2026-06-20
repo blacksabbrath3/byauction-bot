@@ -21,6 +21,11 @@ const AUCTION_SECTIONS = ["auction", "gos"];
 const FIXED_SECTIONS   = ["shop", "showcase", "commerce"];
 const ALL_SECTIONS     = [...AUCTION_SECTIONS, ...FIXED_SECTIONS];
 
+// Ограничение размера списка known_lots на раздел — без этого список растёт
+// бесконечно и JSON.parse/stringify на нём может упереться в CPU-лимит Worker'а.
+// Старые лоты давно сняты с торгов и не нужны для дедупликации новых.
+const MAX_KNOWN_LOTS = 5000;
+
 const PAGE_HEADERS = {
   "User-Agent":      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
   "Accept":          "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -132,8 +137,34 @@ function formatLotMessage(lot) {
 async function handleGetKnownLots(env) {
   const result = {};
   for (const section of ALL_SECTIONS) {
-    const raw = await env.EAUCTION_STORAGE.get(`known_lots:${section}`);
-    result[section] = raw ? JSON.parse(raw) : [];
+    let raw;
+    try {
+      raw = await env.EAUCTION_STORAGE.get(`known_lots:${section}`);
+    } catch (e) {
+      console.error(`known_lots:${section} KV get failed:`, e.message);
+      result[section] = [];
+      continue;
+    }
+
+    if (!raw) { result[section] = []; continue; }
+
+    let list;
+    try {
+      list = JSON.parse(raw);
+    } catch (e) {
+      console.error(`known_lots:${section} JSON.parse failed (corrupt?):`, e.message);
+      result[section] = [];
+      continue;
+    }
+
+    // Самовосстановление: если список разросся сверх лимита (например, после
+    // долгого периода без дневных запусков) — обрезаем и пересохраняем сразу.
+    if (Array.isArray(list) && list.length > MAX_KNOWN_LOTS) {
+      list = list.slice(0, MAX_KNOWN_LOTS);
+      await env.EAUCTION_STORAGE.put(`known_lots:${section}`, JSON.stringify(list));
+    }
+
+    result[section] = list;
   }
   return jsonResponse(result);
 }
@@ -167,6 +198,18 @@ async function handleSaveDailyRun(body, env) {
   return jsonResponse({ ok: true, ts });
 }
 
+// Аварийная очистка одного раздела known_lots без чтения/парсинга текущего значения —
+// полезно если список разросся настолько, что обычное чтение упирается в CPU-лимит.
+async function handleResetKnownLots(body, env) {
+  const { section } = body || {};
+  if (section) {
+    await env.EAUCTION_STORAGE.delete(`known_lots:${section}`);
+    return jsonResponse({ ok: true, cleared: section });
+  }
+  await Promise.all(ALL_SECTIONS.map(s => env.EAUCTION_STORAGE.delete(`known_lots:${s}`)));
+  return jsonResponse({ ok: true, cleared: ALL_SECTIONS });
+}
+
 async function handleSnapshot(body, env) {
   for (const [section, paths] of Object.entries(body.snapshot || {})) {
     await env.EAUCTION_STORAGE.put(`known_lots:${section}`, JSON.stringify(paths));
@@ -190,11 +233,10 @@ async function handleAddLots(body, env) {
   const raw      = await env.EAUCTION_STORAGE.get(`known_lots:${section}`);
   const existing = raw ? JSON.parse(raw) : [];
   const newPaths = paths.filter(p => !existing.includes(p));
-  await env.EAUCTION_STORAGE.put(
-    `known_lots:${section}`,
-    JSON.stringify([...newPaths, ...existing])
-  );
-  return jsonResponse({ ok: true, added: newPaths.length });
+  // Новые пути — впереди (более вероятны при будущих проверках), список обрезаем сверху.
+  const combined = [...newPaths, ...existing].slice(0, MAX_KNOWN_LOTS);
+  await env.EAUCTION_STORAGE.put(`known_lots:${section}`, JSON.stringify(combined));
+  return jsonResponse({ ok: true, added: newPaths.length, total: combined.length });
 }
 
 async function handleSaveDailyLots(body, env) {
@@ -244,6 +286,7 @@ export default {
       if (!body) return new Response("Bad JSON", { status: 400 });
 
       if (method === "POST" && path === "/snapshot")           return handleSnapshot(body, env);
+      if (method === "POST" && path === "/reset-known-lots")   return handleResetKnownLots(body, env);
       if (method === "POST" && path === "/fetch-page")          return handleFetchPage(body);
       if (method === "POST" && path === "/save-categories")    return handleSaveCategories(body, env);
       if (method === "POST" && path === "/add-lots")           return handleAddLots(body, env);
