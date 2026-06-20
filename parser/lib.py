@@ -639,3 +639,5 @@ def parse_lot_details(stored_path: str, section: str = "") -> dict:
     d["location"] = _extract_location(rows)
     d["area"]     = _extract_area(rows)
     d["description"] = _extract_description(soup, d["location"])
+
+    return d
