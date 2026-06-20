@@ -12,8 +12,8 @@
 //   POST /snapshot             → {snapshot: {slug: [lotId, ...]}}
 //   POST /save-categories      → {categories: [...]}
 //   POST /add-lots             → {slug, lot_ids: [...]}
-//   POST /save-daily-lots      → {date, slug, lots: [...], ttl}
-//   POST /send-notifications   → {date, slug}
+//   POST /save-daily-lots      → {date, lots: [...], ttl}
+//   POST /send-notifications   → {date}
 //   POST /fetch-page           → {url} → {ok, status, html}
 //       Для парсинга главной страницы и страниц лотов (SSR).
 //   GET  /api-lots?category=1&page=0&pagesize=50
@@ -28,6 +28,10 @@ import { matchRegion }                         from "../../shared/region.js";
 // ── Константы ──────────────────────────────────────────────
 
 const TORGI_API   = "https://api.torgi.gov.by/api";
+
+// Ограничение размера known_lots — без этого список растёт бесконечно
+// и JSON.parse/stringify на нём может упереться в CPU-лимит Worker'а.
+const MAX_KNOWN_LOTS = 5000;
 
 const API_HEADERS = {
   "User-Agent":  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
@@ -264,7 +268,7 @@ async function handleFetchPage(body) {
 // GET /known-lots
 async function handleGetKnownLots(env) {
   const raw = await env.TORGIGOV_STORAGE.get("known_lots");
-  return jsonResponse(raw ? JSON.parse(raw) : {});
+  return jsonResponse(raw ? JSON.parse(raw) : []);
 }
 
 // GET /categories
@@ -295,18 +299,14 @@ async function handleSaveDailyRun(body, env) {
   return jsonResponse({ ok: true, ts });
 }
 
-// POST /snapshot  {snapshot: {slug: [lotId, ...]}}
+// POST /snapshot  {snapshot: [lotId, ...]}
 async function handleSnapshot(body, env) {
-  const existing = await env.TORGIGOV_STORAGE.get("known_lots");
-  const current  = existing ? JSON.parse(existing) : {};
-  for (const [slug, ids] of Object.entries(body.snapshot || {})) {
-    current[slug] = ids;
-  }
-  await env.TORGIGOV_STORAGE.put("known_lots", JSON.stringify(current));
+  const ids = (body.snapshot || []).map(String);
+  await env.TORGIGOV_STORAGE.put("known_lots", JSON.stringify(ids.slice(0, MAX_KNOWN_LOTS)));
   const ts = new Date().toISOString();
   await env.TORGIGOV_STORAGE.put("snapshot_timestamp", ts);
   await env.TORGIGOV_STORAGE.put("last_full_reset", ts);
-  return jsonResponse({ ok: true, ts });
+  return jsonResponse({ ok: true, ts, count: ids.length });
 }
 
 // POST /save-categories  {categories: [...]}
@@ -317,39 +317,39 @@ async function handleSaveCategories(body, env) {
   return jsonResponse({ ok: true, count: categories.length });
 }
 
-// POST /add-lots  {slug, lot_ids: [...]}
+// POST /add-lots  {lot_ids: [...]}
 async function handleAddLots(body, env) {
-  const { slug, lot_ids } = body;
-  if (!slug || !Array.isArray(lot_ids)) return new Response("Bad request", { status: 400 });
+  const { lot_ids } = body;
+  if (!Array.isArray(lot_ids)) return new Response("Bad request", { status: 400 });
 
   const raw      = await env.TORGIGOV_STORAGE.get("known_lots");
-  const current  = raw ? JSON.parse(raw) : {};
-  const existing = new Set(current[slug] || []);
-  const newIds   = lot_ids.filter(id => !existing.has(String(id)));
+  const existing = raw ? JSON.parse(raw) : [];
+  const existingSet = new Set(existing);
+  const newIds   = lot_ids.map(String).filter(id => !existingSet.has(id));
 
-  current[slug] = [...newIds.map(String), ...(current[slug] || [])];
-  await env.TORGIGOV_STORAGE.put("known_lots", JSON.stringify(current));
-  return jsonResponse({ ok: true, added: newIds.length });
+  const combined = [...newIds, ...existing].slice(0, MAX_KNOWN_LOTS);
+  await env.TORGIGOV_STORAGE.put("known_lots", JSON.stringify(combined));
+  return jsonResponse({ ok: true, added: newIds.length, total: combined.length });
 }
 
-// POST /save-daily-lots  {date, slug, lots: [...], ttl}
+// POST /save-daily-lots  {date, lots: [...], ttl}
 async function handleSaveDailyLots(body, env) {
-  const { date, slug, lots, ttl } = body;
-  if (!date || !slug || !Array.isArray(lots)) return new Response("Bad request", { status: 400 });
+  const { date, lots, ttl } = body;
+  if (!date || !Array.isArray(lots)) return new Response("Bad request", { status: 400 });
   await env.TORGIGOV_STORAGE.put(
-    `daily_lots:${date}:${slug}`,
+    `daily_lots:${date}`,
     JSON.stringify(lots),
     { expirationTtl: ttl || 86400 }
   );
   return jsonResponse({ ok: true, count: lots.length });
 }
 
-// POST /send-notifications  {date, slug}
+// POST /send-notifications  {date}
 async function handleSendNotifications(body, env) {
-  const { date, slug } = body;
-  if (!date || !slug) return new Response("Missing date or slug", { status: 400 });
+  const { date } = body;
+  if (!date) return new Response("Missing date", { status: 400 });
 
-  const lotsRaw = await env.TORGIGOV_STORAGE.get(`daily_lots:${date}:${slug}`);
+  const lotsRaw = await env.TORGIGOV_STORAGE.get(`daily_lots:${date}`);
   if (!lotsRaw) return jsonResponse({ ok: true, sent: 0, reason: "no lots" });
 
   const lots  = JSON.parse(lotsRaw);
