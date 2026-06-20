@@ -53,25 +53,6 @@ def _worker_get(path: str) -> dict:
     return r.json()
 
 
-def was_snapshot_just_run() -> bool:
-    grace = getattr(cfg, "SNAPSHOT_GRACE_MINUTES", 120)
-    try:
-        data = _worker_get("status")
-        snap_ts = data.get("snapshot_ts")
-        snap_dt = _parse_status_ts(snap_ts)
-        if snap_dt is None:
-            return False
-        minutes_ago = (datetime.now(timezone.utc) - snap_dt).total_seconds() / 60
-        print(f"[i] Снапшот был {minutes_ago:.0f} мин назад (grace={grace} мин)")
-        if minutes_ago < grace:
-            print(f"[i] → Пропускаю парсинг (снапшот свежий).")
-            return True
-        return False
-    except Exception as e:
-        print(f"[!] was_snapshot_just_run: {e}")
-        return False
-
-
 def should_do_full_reset() -> bool:
     try:
         data = _worker_get("status")
@@ -319,13 +300,6 @@ def main() -> None:
 
     # Шаг 0: Рандомная задержка (пропускается при ручном запуске)
     random_delay()
-
-    # Шаг 0.5: Если снапшот был запущен недавно — нечего парсить
-    if was_snapshot_just_run():
-        print("\n[i] Снапшот только что завершён — парсинг пропущен.")
-        print("    (Чтобы принудительно запустить, подожди SNAPSHOT_GRACE_MINUTES минут)")
-        print("=" * 60)
-        return
 
     # Шаг 1: Загружаем known_lots
     print("\n[1] Загружаю known_lots…")
