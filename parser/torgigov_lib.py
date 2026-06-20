@@ -2,10 +2,15 @@
 torgigov_lib.py — функции парсера torgi.gov.by
 
 Доступ к данным через Cloudflare Worker (api.torgi.gov.by заблокирован с GitHub IP):
-  GET  {WORKER}/api-lots?category=1&page=0&pagesize=50
+  GET  {WORKER}/api-lots?page=0&pagesize=50
        → Worker → api.torgi.gov.by/api/lots → {"lots":[...],"count":N,"totalPages":N}
   POST {WORKER}/fetch-page {url}
        → Worker → torgi.gov.by SSR-страница → {ok, status, html}
+
+Парсинг идёт БЕЗ категорий — общий список "Недавно добавленные лоты"
+(тот же что на главной странице torgi.gov.by), отсортированный по approvetime.
+Категории на сайте оказались ненадёжны (API иногда отдаёт пустые страницы
+для конкретной категории), общий список работает стабильнее.
 
 Структура ответа API:
   {"status":200,"result":{"lots":[{id,name,location,numAuction,initialPrice,region,...}],
@@ -15,10 +20,8 @@ torgigov_lib.py — функции парсера torgi.gov.by
 
 import re
 import time
-import random
 import requests
 from bs4 import BeautifulSoup
-from urllib.parse import unquote
 
 import config as cfg
 
@@ -52,7 +55,7 @@ def _worker_post(path: str, body: dict) -> dict | None:
 
 
 def get_soup(url: str) -> BeautifulSoup | None:
-    """Получает HTML через Worker /fetch-page (для SSR-страниц)."""
+    """Получает HTML через Worker /fetch-page (для SSR-страниц лотов)."""
     data = _worker_post("fetch-page", {"url": url})
     if not data:
         return None
@@ -67,6 +70,7 @@ def get_soup(url: str) -> BeautifulSoup | None:
 
 
 def pause(base: float) -> None:
+    import random
     jitter = random.uniform(-cfg.DELAY_JITTER, cfg.DELAY_JITTER)
     time.sleep(max(base + jitter, cfg.DELAY_MINIMUM))
 
@@ -76,46 +80,7 @@ def _clean(text: str) -> str:
 
 
 # ════════════════════════════════════════════════════════════
-# КАТЕГОРИИ
-# ════════════════════════════════════════════════════════════
-
-_FALLBACK_CATEGORIES = [
-    {"slug": "nedvizhimost",          "label": "Недвижимость",          "category_id": 1},
-    {"slug": "transport-i-zapchasti", "label": "Транспорт и запчасти",  "category_id": 2},
-    {"slug": "oborudovanie",          "label": "Оборудование",          "category_id": 3},
-    {"slug": "komp-yutery",           "label": "Компьютеры",            "category_id": 4},
-    {"slug": "telefony-i-svyaz",      "label": "Телефоны и связь",      "category_id": 5},
-    {"slug": "mebel-i-inter-er",      "label": "Мебель и интерьер",     "category_id": 6},
-    {"slug": "produkty-pitaniya",     "label": "Продукты питания",      "category_id": 7},
-    {"slug": "tehnika-v-bytu",        "label": "Техника в быту",        "category_id": 8},
-    {"slug": "odezhda-obuv-i-dr",     "label": "Одежда, обувь и др.",   "category_id": 9},
-    {"slug": "stroitel-stvo",         "label": "Строительство",         "category_id": 10},
-    {"slug": "nematerial-nye",        "label": "Нематериальные",        "category_id": 11},
-    {"slug": "pravo-arendy-i-uslugi", "label": "Право аренды и услуги", "category_id": 167},
-    {"slug": "zhivotnye-i-rasteniya", "label": "Животные и растения",   "category_id": 164},
-]
-
-_TOP_IDS = set(range(1, 14)) | {164, 167}
-# Ссылки в HTML хранятся в URL-encoded виде: /catalog/{slug}/1/%3Fcategory%3D{id}
-_CAT_PAT_ENCODED = re.compile(r"/catalog/([a-z0-9-]+)/1/%3Fcategory%3D(\d+)")
-_CAT_PAT_PLAIN   = re.compile(r"/catalog/([a-z0-9-]+)/1/\?category=(\d+)")
-
-
-def parse_top_categories() -> list[dict]:
-    """
-    Возвращает список top-level категорий.
-    Главная страница torgi.gov.by — Angular SPA, меню в SSR не рендерится.
-    Категории стабильны (IDs 1-11, 167, 164 не меняются), поэтому
-    используем hardcoded список. Раз в месяц snapshot сохраняет его в KV.
-    """
-    print("[→] Использую список категорий torgi.gov.by…")
-    categories = list(_FALLBACK_CATEGORIES)
-    print(f"[✓] Категорий: {len(categories)}")
-    return categories
-
-
-# ════════════════════════════════════════════════════════════
-# API: ПОЛУЧЕНИЕ ЛОТОВ
+# API: ПОЛУЧЕНИЕ ЛОТОВ (без категорий — общий список)
 # ════════════════════════════════════════════════════════════
 
 def _lot_id(raw: dict) -> str:
@@ -134,7 +99,7 @@ def _format_price(val) -> str:
         return str(val)
 
 
-def normalize_lot(raw: dict, slug: str) -> dict:
+def normalize_lot(raw: dict) -> dict:
     """
     Нормализует объект лота из API.
     Поля из реального ответа: id, name, location, numAuction,
@@ -147,7 +112,6 @@ def normalize_lot(raw: dict, slug: str) -> dict:
     return {
         "lot_id":   lot_id,
         "url":      url,
-        "slug":     slug,
         "title":    str(raw.get("name") or ""),
         "category": str(raw.get("category") or ""),   # числовой ID
         "region":   str(raw.get("region") or ""),     # числовой ID
@@ -157,17 +121,14 @@ def normalize_lot(raw: dict, slug: str) -> dict:
     }
 
 
-def fetch_lots_page(
-    category_id: int, slug: str,
-    page: int = 0, pagesize: int = 50,
-) -> tuple[list[dict], int]:
+def fetch_lots_page(page: int = 0, pagesize: int = 50) -> tuple[list[dict], int]:
     """
-    Запрашивает страницу лотов через Worker /api-lots.
+    Запрашивает страницу общего списка лотов (без category) через Worker /api-lots.
+    Сортировка — approvetime (как "Недавно добавленные" на главной странице).
     Возвращает (лоты, totalPages).
     """
-    worker_url = (f"{cfg.TORGIGOV_WORKER_URL}/api-lots"
-                  .replace("//api-lots", "/api-lots"))
-    params     = {"category": category_id, "page": page, "pagesize": pagesize}
+    worker_url = f"{cfg.TORGIGOV_WORKER_URL}/api-lots"
+    params     = {"page": page, "pagesize": pagesize}
 
     for attempt in range(1, cfg.REQUEST_RETRIES + 1):
         try:
@@ -208,7 +169,7 @@ def fetch_lots_page(
     if not isinstance(raw_lots, list):
         return [], 0
 
-    lots = [normalize_lot(r, slug) for r in raw_lots if _lot_id(r)]
+    lots = [normalize_lot(r) for r in raw_lots if _lot_id(r)]
     return lots, total_pages
 
 
@@ -271,4 +232,3 @@ def _extract_lot_from_page(soup: BeautifulSoup, url: str) -> dict:
                 else:
                     result["price"] = raw
     return result
-  

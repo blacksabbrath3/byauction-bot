@@ -1,14 +1,13 @@
 """
 torgigov_daily.py — ежедневный парсер новых лотов torgi.gov.by
 
-Алгоритм:
-  1. GET /known-lots  → {slug: [lot_id, ...]}
-  2. GET /categories  → список из KV
-  3. По каждой категории: GET /api-lots?page=0&pagesize=50&sort=approvetime
+Алгоритм (без категорий — общий список "Недавно добавленные"):
+  1. GET /known-lots  → set(lot_id)
+  2. GET /api-lots?page=0&pagesize=50&sort=approvetime (без category)
      Сравниваем ID с known_lots — находим новые (остановка при первом известном)
-  4. POST /add-lots   → добавляем новые ID
-  5. POST /save-daily-lots → сохраняем детали новых лотов
-  6. Ждём NOTIFY_TIME_UTC → POST /send-notifications
+  3. POST /add-lots   → добавляем новые ID
+  4. POST /save-daily-lots → сохраняем детали новых лотов
+  5. Ждём NOTIFY_TIME_UTC → POST /send-notifications
 """
 
 import os
@@ -52,22 +51,20 @@ def _post(path: str, body: dict) -> dict:
     return r.json()
 
 
-def fetch_known_lots() -> dict[str, set[str]]:
-    """GET /known-lots → {slug: set(lot_id)}"""
+def fetch_known_lots() -> set[str]:
+    """GET /known-lots → set(lot_id) — теперь плоский список без категорий."""
     try:
         data = _get("known-lots")
-        return {slug: set(str(i) for i in ids) for slug, ids in data.items()}
+        if isinstance(data, dict):
+            # Совместимость со старым форматом {slug: [ids]}, если воркер ещё не обновлён
+            all_ids: set[str] = set()
+            for ids in data.values():
+                all_ids.update(str(i) for i in ids)
+            return all_ids
+        return set(str(i) for i in data)
     except Exception as e:
         print(f"[!] known-lots: {e} — пустая база")
-        return {}
-
-
-def fetch_categories() -> list[dict]:
-    try:
-        return _get("categories")
-    except Exception as e:
-        print(f"[!] categories: {e}")
-        return []
+        return set()
 
 
 def should_do_full_reset() -> bool:
@@ -158,24 +155,22 @@ def send_alert(error: str) -> None:
 # ПАРСИНГ ОДНОЙ КАТЕГОРИИ
 # ════════════════════════════════════════════════════════════
 
-def parse_category_daily(cat: dict, known_ids: set[str]) -> list[dict]:
+def parse_daily(known_ids: set[str]) -> list[dict]:
     """
-    Запрашивает первую страницу API, находит новые лоты.
+    Запрашивает общий список лотов (без category — "Недавно добавленные",
+    как на главной странице torgi.gov.by), находит новые.
     Если все лоты на странице новые — запрашивает следующую.
     Останавливается при первом известном lot_id.
     """
-    slug   = cat["slug"]
-    cat_id = cat["category_id"]
-    label  = cat["label"]
-    print(f"\n[+] Категория: {label}")
+    print(f"\n[+] Общий список лотов (без категорий)")
 
     all_new: list[dict] = []
     pagesize = cfg.DAILY_PAGE_SIZE
     page     = 0
 
     while True:
-        print(f"  → стр. {page}: category={cat_id}")
-        lots, total_pages = lib.fetch_lots_page(cat_id, slug, page=page, pagesize=pagesize)
+        print(f"  → стр. {page}")
+        lots, total_pages = lib.fetch_lots_page(page=page, pagesize=pagesize)
 
         if not lots:
             print(f"  [i] Пустая страница — останавливаю")
@@ -204,12 +199,12 @@ def parse_category_daily(cat: dict, known_ids: set[str]) -> list[dict]:
 # СОХРАНЕНИЕ
 # ════════════════════════════════════════════════════════════
 
-def save_new_lots(slug: str, new_lots: list[dict]) -> None:
+def save_new_lots(new_lots: list[dict]) -> None:
     if not new_lots:
         return
     ids = [l["lot_id"] for l in new_lots if l["lot_id"]]
     try:
-        r = _post("add-lots", {"slug": slug, "lot_ids": ids})
+        r = _post("add-lots", {"lot_ids": ids})
         print(f"  [✓] /add-lots: {r}")
     except Exception as e:
         print(f"  [✗] /add-lots: {e}")
@@ -217,7 +212,7 @@ def save_new_lots(slug: str, new_lots: list[dict]) -> None:
     today = date.today().isoformat()
     try:
         r = _post("save-daily-lots", {
-            "date": today, "slug": slug,
+            "date": today,
             "lots": new_lots, "ttl": cfg.DAILY_LOTS_TTL_SECONDS,
         })
         print(f"  [✓] /save-daily-lots: {r}")
@@ -239,28 +234,26 @@ def wait_until_notify_time() -> None:
         time.sleep(wait)
 
 
-def send_notifications(slugs: list[str]) -> None:
+def send_notifications() -> None:
     today = date.today().isoformat()
-    for slug in slugs:
-        print(f"  [→] /send-notifications: {slug}")
-        try:
-            r = _post("send-notifications", {"date": today, "slug": slug})
-            print(f"  [✓] {r}")
-        except Exception as e:
-            print(f"  [✗] {e}")
+    print(f"  [→] /send-notifications: {today}")
+    try:
+        r = _post("send-notifications", {"date": today})
+        print(f"  [✓] {r}")
+    except Exception as e:
+        print(f"  [✗] {e}")
 
 
 # ════════════════════════════════════════════════════════════
 # MAIN
 # ════════════════════════════════════════════════════════════
 
-def save_daily_run(total_new: int, slugs_with_new: list[str]) -> None:
+def save_daily_run(total_new: int) -> None:
     today = date.today().isoformat()
     try:
         r = _post("save-daily-run", {
             "date":       today,
             "lots_found": total_new,
-            "categories": slugs_with_new,
         })
         print(f"  [✓] /save-daily-run: {r}")
     except Exception as e:
@@ -285,37 +278,19 @@ def main() -> None:
     random_delay()
 
     print("\n[1] Загружаю known_lots…")
-    known_all = fetch_known_lots()
-    for slug, ids in known_all.items():
-        print(f"    {slug:45s}: {len(ids)} известных")
+    known_ids = fetch_known_lots()
+    print(f"    Известно лотов: {len(known_ids)}")
 
-    print("\n[2] Загружаю категории…")
-    categories = fetch_categories()
-    if not categories:
-        print("[!] Категории не получены — парсю напрямую…")
-        categories = lib.parse_top_categories()
-    if not categories:
-        raise RuntimeError("Не удалось получить список категорий")
-    print(f"    Категорий: {len(categories)}")
+    print("\n[2] Парсю общий список лотов (без категорий)…")
+    new_lots = parse_daily(known_ids)
 
-    total_new      = 0
-    slugs_with_new = []
-
-    for cat in categories:
-        slug     = cat["slug"]
-        known    = known_all.get(slug, set())
-        new_lots = parse_category_daily(cat, known)
-
-        if not new_lots:
-            continue
-
-        total_new += len(new_lots)
-        slugs_with_new.append(slug)
-        save_new_lots(slug, new_lots)
-        lib.pause(cfg.DELAY_BETWEEN_SECTIONS)
-
+    total_new = len(new_lots)
     print(f"\n{'─' * 60}")
     print(f"  Итого новых лотов: {total_new}")
+
+    if new_lots:
+        save_new_lots(new_lots)
+        lib.pause(cfg.DELAY_BETWEEN_SECTIONS)
 
     print("\n[3] Проверяю необходимость полного сброса…")
     if should_do_full_reset():
@@ -325,12 +300,12 @@ def main() -> None:
         print("[i] Полный сброс не нужен.")
 
     # Сохраняем дату и результат последнего дневного парсинга в KV
-    save_daily_run(total_new, slugs_with_new)
+    save_daily_run(total_new)
 
-    if slugs_with_new:
+    if new_lots:
         wait_until_notify_time()
         print("\n[4] Отправляю уведомления…")
-        send_notifications(slugs_with_new)
+        send_notifications()
     else:
         print("\n[4] Новых лотов нет — уведомления не отправляются.")
 
