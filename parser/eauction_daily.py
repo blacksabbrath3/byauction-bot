@@ -226,6 +226,9 @@ def fetch_details_and_save(section: str, new_paths: list[str]) -> None:
     for i, path in enumerate(new_paths, 1):
         print(f"    [{i}/{len(new_paths)}] {path}")
         lot = lib.parse_lot_details(path, section)
+        if lot is None:
+            print(f"      [!] Не удалось получить детали лота — пропуск")
+            continue
         lot["section"] = section
         lots.append(lot)
         lib.pause(cfg.DELAY_BETWEEN_LOT_PAGES)
