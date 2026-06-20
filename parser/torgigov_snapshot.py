@@ -1,10 +1,12 @@
 """
 torgigov_snapshot.py — полный слепок лотов torgi.gov.by
 
-Алгоритм (без категорий — общий список "Недавно добавленные"):
-  1. По общему списку (без category) последовательно собираем lot_id
-     со страниц, пока не наберём SNAPSHOT_TARGET_COUNT лотов
-     (или не закончатся страницы) → POST /snapshot
+Алгоритм: проходим по всем категориям из torgigov_lib.CATEGORIES
+(133 шт., реальные ID с сайта), собираем ID лотов с первых нескольких
+страниц каждой → POST /snapshot (плоский список).
+
+API torgi.gov.by требует category как обязательный параметр — общий
+список без категории недоступен, поэтому идём по дереву категорий.
 """
 
 import sys
@@ -16,8 +18,10 @@ import torgigov_lib as lib
 WORKER_URL    = cfg.TORGIGOV_WORKER_URL
 PARSER_SECRET = cfg.PARSER_SECRET
 
-# Сколько последних лотов достаточно сохранить в снапшоте для дедупликации
-SNAPSHOT_TARGET_COUNT = getattr(cfg, "SNAPSHOT_TARGET_COUNT", 30)
+# Сколько страниц на категорию максимум сканировать для снапшота
+# (большие категории типа "Прочее" могут быть многостраничными,
+# но для дедупликации достаточно последних N лотов)
+SNAPSHOT_MAX_PAGES_PER_CATEGORY = getattr(cfg, "SNAPSHOT_MAX_PAGES_PER_CATEGORY", 3)
 
 
 def _post(path: str, body: dict) -> dict:
@@ -33,30 +37,39 @@ def _post(path: str, body: dict) -> dict:
 
 def collect_snapshot_ids() -> list[str]:
     """
-    Собирает lot_id с общего списка (без категорий), постранично,
-    пока не наберёт SNAPSHOT_TARGET_COUNT или не закончатся страницы.
+    Проходит по всем категориям, собирает lot_id с первых страниц каждой.
     """
-    ids: list[str] = []
-    page     = 0
-    pagesize = cfg.DAILY_PAGE_SIZE
+    categories = lib.parse_top_categories()
+    print(f"  Категорий: {len(categories)}")
 
-    while len(ids) < SNAPSHOT_TARGET_COUNT:
-        print(f"  → стр. {page}")
-        lots, total_pages = lib.fetch_lots_page(page=page, pagesize=pagesize)
+    all_ids: list[str] = []
+    seen: set[str] = set()
 
-        if not lots:
-            print(f"  [i] Пустая страница — останавливаю")
-            break
+    for cat in categories:
+        slug   = cat["slug"]
+        cat_id = cat["category_id"]
+        pagesize = cfg.DAILY_PAGE_SIZE
 
-        ids.extend(l["lot_id"] for l in lots if l["lot_id"])
-        print(f"     лотов на странице: {len(lots)}, всего собрано: {len(ids)}")
+        for page in range(SNAPSHOT_MAX_PAGES_PER_CATEGORY):
+            lots, total_pages = lib.fetch_lots_page(cat_id, slug, page=page, pagesize=pagesize)
+            if not lots:
+                break
 
-        if page + 1 >= total_pages:
-            break
-        page += 1
+            new_count = 0
+            for l in lots:
+                lid = l["lot_id"]
+                if lid and lid not in seen:
+                    seen.add(lid)
+                    all_ids.append(lid)
+                    new_count += 1
+
+            if page + 1 >= total_pages:
+                break
+            lib.pause(cfg.DELAY_BETWEEN_LIST_PAGES)
+
         lib.pause(cfg.DELAY_BETWEEN_LIST_PAGES)
 
-    return ids[:SNAPSHOT_TARGET_COUNT]
+    return all_ids
 
 
 def main() -> None:
@@ -64,7 +77,7 @@ def main() -> None:
     print("  torgi.gov.by — полный слепок")
     print("=" * 60)
 
-    print("\n[1] Собираю слепок лотов (без категорий)…")
+    print("\n[1] Собираю слепок лотов по категориям…")
     ids = collect_snapshot_ids()
 
     print("\n[2] Сохраняю снапшот…")

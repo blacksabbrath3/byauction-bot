@@ -1,13 +1,18 @@
 """
 torgigov_daily.py — ежедневный парсер новых лотов torgi.gov.by
 
-Алгоритм (без категорий — общий список "Недавно добавленные"):
-  1. GET /known-lots  → set(lot_id)
-  2. GET /api-lots?page=0&pagesize=50&sort=approvetime (без category)
+Алгоритм:
+  1. GET /known-lots  → set(lot_id) — плоский список ID без привязки к категориям
+  2. Для каждой категории из lib.CATEGORIES (133 шт, реальные ID с сайта):
+     GET /api-lots?category=N&page=0&pagesize=50
      Сравниваем ID с known_lots — находим новые (остановка при первом известном)
   3. POST /add-lots   → добавляем новые ID
   4. POST /save-daily-lots → сохраняем детали новых лотов
   5. Ждём NOTIFY_TIME_UTC → POST /send-notifications
+
+ВАЖНО: API torgi.gov.by требует category как обязательный параметр —
+без него возвращает {"status":400}. Поэтому обходим список категорий,
+а не общий поток "Недавно добавленные" (тот недоступен напрямую через API).
 """
 
 import os
@@ -155,43 +160,43 @@ def send_alert(error: str) -> None:
 # ПАРСИНГ ОДНОЙ КАТЕГОРИИ
 # ════════════════════════════════════════════════════════════
 
-def parse_daily(known_ids: set[str]) -> list[dict]:
+def parse_category_daily(cat: dict, known_ids: set[str]) -> list[dict]:
     """
-    Запрашивает общий список лотов (без category — "Недавно добавленные",
-    как на главной странице torgi.gov.by), находит новые.
+    Запрашивает первую страницу категории, находит новые лоты.
     Если все лоты на странице новые — запрашивает следующую.
-    Останавливается при первом известном lot_id.
+    Останавливается при первом известном lot_id (API сортирует по новизне).
     """
-    print(f"\n[+] Общий список лотов (без категорий)")
+    slug   = cat["slug"]
+    cat_id = cat["category_id"]
+    label  = cat["label"]
 
     all_new: list[dict] = []
     pagesize = cfg.DAILY_PAGE_SIZE
     page     = 0
 
     while True:
-        print(f"  → стр. {page}")
-        lots, total_pages = lib.fetch_lots_page(page=page, pagesize=pagesize)
+        lots, total_pages = lib.fetch_lots_page(cat_id, slug, page=page, pagesize=pagesize)
 
         if not lots:
-            print(f"  [i] Пустая страница — останавливаю")
+            if page == 0:
+                # Категория либо пуста, либо API дал сбой на первой же странице —
+                # тихо пропускаем, не тратя больше запросов.
+                return []
             break
 
         new_on_page = lib.find_new_lots_by_id(lots, known_ids)
         all_new.extend(new_on_page)
 
-        print(f"     лотов: {len(lots)}, новых: {len(new_on_page)}")
-
-        # Если на странице есть известные — все остальные тоже известны
         if len(new_on_page) < len(lots):
             break
-        # Все на странице новые и есть следующая — идём дальше
         if page + 1 < total_pages:
             page += 1
             lib.pause(cfg.DELAY_BETWEEN_LIST_PAGES)
         else:
             break
 
-    print(f"  Новых лотов: {len(all_new)}")
+    if all_new:
+        print(f"  [+] {label} (id={cat_id}): новых {len(all_new)}")
     return all_new
 
 
@@ -281,15 +286,25 @@ def main() -> None:
     known_ids = fetch_known_lots()
     print(f"    Известно лотов: {len(known_ids)}")
 
-    print("\n[2] Парсю общий список лотов (без категорий)…")
-    new_lots = parse_daily(known_ids)
+    categories = lib.parse_top_categories()
+    print(f"\n[2] Парсю {len(categories)} категорий…")
 
-    total_new = len(new_lots)
+    all_new: list[dict] = []
+    for cat in categories:
+        new_lots = parse_category_daily(cat, known_ids)
+        if new_lots:
+            all_new.extend(new_lots)
+            # Сразу добавляем в known_ids, чтобы избежать дублей если один и тот же
+            # лот попадётся в нескольких категориях (родитель/подкатегория).
+            known_ids.update(l["lot_id"] for l in new_lots)
+        lib.pause(cfg.DELAY_BETWEEN_LIST_PAGES)
+
+    total_new = len(all_new)
     print(f"\n{'─' * 60}")
     print(f"  Итого новых лотов: {total_new}")
 
-    if new_lots:
-        save_new_lots(new_lots)
+    if all_new:
+        save_new_lots(all_new)
         lib.pause(cfg.DELAY_BETWEEN_SECTIONS)
 
     print("\n[3] Проверяю необходимость полного сброса…")
@@ -302,7 +317,7 @@ def main() -> None:
     # Сохраняем дату и результат последнего дневного парсинга в KV
     save_daily_run(total_new)
 
-    if new_lots:
+    if all_new:
         wait_until_notify_time()
         print("\n[4] Отправляю уведомления…")
         send_notifications()
