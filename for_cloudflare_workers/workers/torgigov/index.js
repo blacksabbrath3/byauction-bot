@@ -182,6 +182,18 @@ async function handleApiLots(request) {
     // Логируем для диагностики
     console.log(`api-lots: apiUrl=${apiUrl} status=${resp.status} count=${count}`);
 
+    if (lots.length === 0) {
+      // Пустой результат — добавляем диагностику прямо в ответ, чтобы парсер
+      // мог сразу увидеть причину без отдельного похода в /debug-api
+      return jsonResponse({
+        lots: [], count: 0, totalPages: 1,
+        _debug_apiUrl:    apiUrl,
+        _debug_apiStatus: resp.status,
+        _debug_rawBody:   text.slice(0, 500),
+        _debug_dataKeys:  Object.keys(data || {}),
+      });
+    }
+
     return jsonResponse({ lots, count, totalPages, _debug_apiUrl: apiUrl, _debug_apiStatus: resp.status });
   } catch (e) {
     return jsonResponse({ ok: false, error: String(e.message), apiUrl }, 502);
