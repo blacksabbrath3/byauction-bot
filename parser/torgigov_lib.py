@@ -166,6 +166,11 @@ def fetch_lots_page(page: int = 0, pagesize: int = 50) -> tuple[list[dict], int]
     raw_lots    = data.get("lots", [])
     total_pages = int(data.get("totalPages", 1) or 1)
 
+    if not raw_lots and data.get("_debug_apiUrl"):
+        print(f"  [debug] apiUrl={data.get('_debug_apiUrl')}")
+        print(f"  [debug] apiStatus={data.get('_debug_apiStatus')}")
+        print(f"  [debug] rawBody={data.get('_debug_rawBody', '')[:300]}")
+
     if not isinstance(raw_lots, list):
         return [], 0
 
