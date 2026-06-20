@@ -17,7 +17,7 @@ WORKER_URL    = cfg.TORGIGOV_WORKER_URL
 PARSER_SECRET = cfg.PARSER_SECRET
 
 # Сколько последних лотов достаточно сохранить в снапшоте для дедупликации
-SNAPSHOT_TARGET_COUNT = getattr(cfg, "SNAPSHOT_TARGET_COUNT", 2000)
+SNAPSHOT_TARGET_COUNT = getattr(cfg, "SNAPSHOT_TARGET_COUNT", 30)
 
 
 def _post(path: str, body: dict) -> dict:
