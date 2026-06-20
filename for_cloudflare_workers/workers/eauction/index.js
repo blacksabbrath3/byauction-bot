@@ -5,6 +5,9 @@
 //   KV:      EAUCTION_STORAGE → eauction_storage
 //            SUBSCRIBERS      → bot_subscribers
 //   Secrets: BOT_TOKEN, PARSER_SECRET
+//
+// Прокси: POST /fetch-page {url} → {ok, status, html}
+//   Cloudflare IP не блокируется e-auction.by (в отличие от GitHub Actions IP)
 // ============================================================
 
 import { matchKeywords }                        from "../../shared/matchKeyword.js";
@@ -17,6 +20,37 @@ import { matchRegion }                          from "../../shared/region.js";
 const AUCTION_SECTIONS = ["auction", "gos"];
 const FIXED_SECTIONS   = ["shop", "showcase", "commerce"];
 const ALL_SECTIONS     = [...AUCTION_SECTIONS, ...FIXED_SECTIONS];
+
+const PAGE_HEADERS = {
+  "User-Agent":      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+  "Accept":          "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+  "Accept-Language": "ru-RU,ru;q=0.9,en;q=0.8",
+  "Accept-Encoding": "gzip, deflate, br",
+  "Cache-Control":   "no-cache",
+};
+
+// ── Прокси: GET страницы ────────────────────────────────────────
+
+async function handleFetchPage(body) {
+  const { url } = body || {};
+  if (!url) return jsonResponse({ ok: false, error: "Missing url" }, 400);
+
+  let parsed;
+  try { parsed = new URL(url); } catch {
+    return jsonResponse({ ok: false, error: "Invalid url" }, 400);
+  }
+  if (!["e-auction.by", "www.e-auction.by"].includes(parsed.hostname)) {
+    return jsonResponse({ ok: false, error: "Only e-auction.by allowed" }, 403);
+  }
+
+  try {
+    const resp = await fetch(url, { headers: PAGE_HEADERS, redirect: "follow" });
+    const html = await resp.text();
+    return jsonResponse({ ok: true, status: resp.status, html });
+  } catch (e) {
+    return jsonResponse({ ok: false, error: e.message }, 502);
+  }
+}
 
 const FALLBACK_CATEGORIES = [
   { slug: "legkovye_avtomobili",                            label: "Легковые автомобили" },
@@ -210,6 +244,7 @@ export default {
       if (!body) return new Response("Bad JSON", { status: 400 });
 
       if (method === "POST" && path === "/snapshot")           return handleSnapshot(body, env);
+      if (method === "POST" && path === "/fetch-page")          return handleFetchPage(body);
       if (method === "POST" && path === "/save-categories")    return handleSaveCategories(body, env);
       if (method === "POST" && path === "/add-lots")           return handleAddLots(body, env);
       if (method === "POST" && path === "/save-daily-lots")    return handleSaveDailyLots(body, env);
