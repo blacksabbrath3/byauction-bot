@@ -19,23 +19,36 @@ EAUCTION_WORKER_URL = (
 # URL воркера rechitsa (rechitsa-worker)
 RECHITSA_WORKER_URL = os.environ.get("RECHITSA_WORKER_URL", "").rstrip("/")
 
+# URL воркера БУТБ (butb-worker)
+BUTB_WORKER_URL = os.environ.get("BUTB_WORKER_URL", "").rstrip("/")
+
 # Общий секрет для авторизации запросов к воркерам
 PARSER_SECRET = os.environ.get("PARSER_SECRET", "")
 
 # ════════════════════════════════════════════════════════════
 # РАСПИСАНИЕ И РАНДОМНАЯ ЗАДЕРЖКА
 # ════════════════════════════════════════════════════════════
-
-# Workflow запускается в 02:00 UTC.
-# Парсер сам спит случайное время до RANDOM_DELAY_MAX_SECONDS,
-# чтобы реальный старт был равномерно распределён между 02:00 и 06:00 UTC.
-# При ручном запуске (workflow_dispatch) задержка пропускается автоматически —
+#
+# Расписание стартов (зеркальное, шаг 45 мин, время Минска UTC+3):
+#   Понедельник  01:07
+#   Вторник      01:52
+#   Среда        02:37
+#   Четверг      03:22   ← пик
+#   Пятница      02:37
+#   Суббота      01:52
+#   Воскресенье  01:07
+# Точные cron-выражения (UTC) — см. .github/workflows/*_daily.yml.
+# Уведомления отправляются сразу по завершении парсинга, без ожидания
+# фиксированного времени — расписание стартов само контролирует, когда
+# подписчики получат сообщения (не нужно держать runner спящим в фоне,
+# это тратит лимит бесплатных минут GitHub Actions впустую).
+#
+# Небольшая рандомная задержка перед стартом — чтобы не все 4 парсера
+# дёргали свои сайты в одну и ту же секунду (на случай если workflow'ы
+# запускаются почти одновременно по расписанию).
+# При ручном запуске (workflow_dispatch) задержка пропускается —
 # переменная окружения SKIP_RANDOM_DELAY=true выставляется в yml.
-RANDOM_DELAY_MAX_SECONDS = 144  # 4 часа
-
-# Время отправки уведомлений подписчикам (UTC).
-# "06:00" UTC = 09:00 Минск (UTC+3).
-NOTIFY_TIME_UTC = "06:00"
+RANDOM_DELAY_MAX_SECONDS = 180  # 3 минуты
 
 # ════════════════════════════════════════════════════════════
 # e-auction.by — РАЗДЕЛЫ САЙТА
@@ -145,17 +158,11 @@ TORGIGOV_WORKER_URL = os.environ.get("TORGIGOV_WORKER_URL", "").rstrip("/")
 # Максимум лотов на категорию при первичном слепке
 TORGIGOV_SNAPSHOT_LOTS_LIMIT = 40
 
-# ════════════════════════════════════════════════════════════
-# torgi.gov.by — НАСТРОЙКИ ПАРСЕРА
-# ════════════════════════════════════════════════════════════
-
-# URL воркера torgigov
-TORGIGOV_WORKER_URL = os.environ.get("TORGIGOV_WORKER_URL", "").rstrip("/")
-
 TORGIGOV_BASE_URL = "https://torgi.gov.by"
 
-# top-level category_id на torgi.gov.by (1–13, 164, 167)
-# Перечислены для справки; реальный список хранится в KV и берётся оттуда.
+# top-level category_id на torgi.gov.by — справочные, для отображения категории
+# в уведомлении (см. torgigov_lib.CATEGORIES). Сам список лотов запрашивается
+# без фильтра по category — API не поддерживает этот параметр как фильтр запроса.
 TORGIGOV_TOP_LEVEL_CATEGORY_IDS = list(range(1, 14)) + [164, 167]
 
 # ════════════════════════════════════════════════════════════
@@ -194,3 +201,10 @@ ALERT_TELEGRAM_CHAT_ID = os.environ.get("ALERT_TELEGRAM_CHAT_ID", "")
 # Размер страницы при запросе API лотов
 SNAPSHOT_PAGE_SIZE = int(os.environ.get("SNAPSHOT_PAGE_SIZE", "50"))
 DAILY_PAGE_SIZE    = int(os.environ.get("DAILY_PAGE_SIZE",    "9"))   # torgi.gov.by API: только pagesize=9 подтверждённо работает
+
+# torgi.gov.by: сколько ИЗВЕСТНЫХ лотов подряд нужно встретить, чтобы
+# остановить дальнейший сбор (защита от единичных "выпадающих" лотов
+# в середине ленты — например, временно снятых и переопубликованных).
+TORGIGOV_STOP_AFTER_CONSECUTIVE_KNOWN = int(
+    os.environ.get("TORGIGOV_STOP_AFTER_CONSECUTIVE_KNOWN", "3")
+)
