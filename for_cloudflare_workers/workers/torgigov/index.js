@@ -1,5 +1,5 @@
 // ============================================================
-// workers/torgigov/index.js 
+// workers/torgigov/index.js
 //
 // Bindings:
 //   KV:      TORGIGOV_STORAGE, SUBSCRIBERS
@@ -147,16 +147,22 @@ function formatLotMessage(lot) {
 // HANDLERS
 // ════════════════════════════════════════════════════════════
 
-// GET /api-lots?category=1&page=0&pagesize=50&...
+// GET /api-lots?page=0&pagesize=50&state=15,16,4,5,18,19,20,21,22,23
 async function handleApiLots(request) {
   const inUrl    = new URL(request.url);
   const pagesize = parseInt(inUrl.searchParams.get("pagesize") || "50");
 
-  // Берём параметры напрямую из входящего запроса, добавляем только обязательные дефолты
+  // Параметры реального рабочего запроса с сайта (подтверждено через DevTools):
+  //   page, pagesize, sort=start, state=15,16,4,5,18,19,20,21,22,23
+  // category НЕ требуется и не поддерживается как фильтр на этом эндпоинте —
+  // категория лота приходит в каждом объекте лота (lot.category, число) и
+  // фильтруется на нашей стороне, а не через query-параметр API.
+  // state — обязательный параметр: список числовых статусов аукциона
+  // (видимо "опубликован"/"идёт приём заявок" и т.п.), без него API отдаёт
+  // HTTP 200 с телом {"status":400,"message":"Request failed: "}.
   const params = new URLSearchParams({
-    onlyNotActive: "false",
-    history:       "false",
-    sort1:         "approvetime",
+    sort:  "start",
+    state: "15,16,4,5,18,19,20,21,22,23",
   });
   // Параметры от парсера перезаписывают дефолты
   for (const [k, v] of inUrl.searchParams) {
