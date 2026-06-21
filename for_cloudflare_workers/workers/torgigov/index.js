@@ -1,23 +1,23 @@
 // ============================================================
-// workers/torgigov/index.js 
+// workers/torgigov/index.js
 //
 // Bindings:
 //   KV:      TORGIGOV_STORAGE, SUBSCRIBERS
 //   Secrets: BOT_TOKEN, PARSER_SECRET
 //
 // Endpoints:
-//   GET  /known-lots           → {slug: [lotId, ...]}
-//   GET  /categories           → [{slug, label, category_id}, ...]
+//   GET  /known-lots           → [lotId, ...]
 //   GET  /status               → {last_full_reset, snapshot_ts}
-//   POST /snapshot             → {snapshot: {slug: [lotId, ...]}}
-//   POST /save-categories      → {categories: [...]}
-//   POST /add-lots             → {slug, lot_ids: [...]}
+//   POST /snapshot             → {snapshot: [lotId, ...]}
+//   POST /add-lots             → {lot_ids: [...]}
 //   POST /save-daily-lots      → {date, lots: [...], ttl}
 //   POST /send-notifications   → {date}
 //   POST /fetch-page           → {url} → {ok, status, html}
 //       Для парсинга главной страницы и страниц лотов (SSR).
-//   GET  /api-lots?category=1&page=0&pagesize=50
+//   GET  /api-lots?page=0&pagesize=9&sort=start&state=15,16,4,5,18,19,20,21,22,23
 //       Проксирует GET к api.torgi.gov.by/api/lots — недоступен с GitHub IP.
+//       Список без категорий (как "Недавно добавленные" на главной) —
+//       подтверждённый рабочий запрос снят через DevTools с реального сайта.
 // ============================================================
 
 import { matchKeywords }                       from "../../shared/matchKeyword.js";
@@ -51,15 +51,6 @@ const REGION_ID_MAP = {
   13: "Минск",
 };
 
-// ID верхнеуровневых категорий → название
-const CATEGORY_ID_MAP = {
-  1: "Недвижимость", 2: "Транспорт и запчасти", 3: "Оборудование",
-  4: "Компьютеры", 5: "Телефоны и связь", 6: "Мебель и интерьер",
-  7: "Продукты питания", 8: "Техника в быту", 9: "Одежда, обувь и др.",
-  10: "Строительство", 11: "Нематериальные", 164: "Животные и растения",
-  167: "Право аренды и услуги",
-};
-
 function resolveRegion(raw) {
   if (!raw && raw !== 0) return "";
   // Числовой ID
@@ -77,32 +68,6 @@ function resolveRegion(raw) {
     if (lower.includes(key)) return val;
   }
   return String(raw);
-}
-
-function resolveCategory(catId, slug) {
-  // Сначала пробуем по числовому ID (если ID верхней категории)
-  const num = parseInt(catId);
-  if (!isNaN(num) && CATEGORY_ID_MAP[num]) return CATEGORY_ID_MAP[num];
-  // Если ID подкатегории — используем slug верхней категории как подсказку
-  if (slug) {
-    const slugLabels = {
-      "nedvizhimost": "Недвижимость",
-      "transport-i-zapchasti": "Транспорт и запчасти",
-      "oborudovanie": "Оборудование",
-      "komp-yutery": "Компьютеры",
-      "telefony-i-svyaz": "Телефоны и связь",
-      "mebel-i-inter-er": "Мебель и интерьер",
-      "produkty-pitaniya": "Продукты питания",
-      "tehnika-v-bytu": "Техника в быту",
-      "odezhda-obuv-i-dr": "Одежда, обувь и др.",
-      "stroitel-stvo": "Строительство",
-      "nematerial-nye": "Нематериальные",
-      "pravo-arendy-i-uslugi": "Право аренды и услуги",
-      "zhivotnye-i-rasteniya": "Животные и растения",
-    };
-    if (slugLabels[slug]) return slugLabels[slug];
-  }
-  return "";
 }
 
 // ── Матчинг подписки ───────────────────────────────────────
@@ -134,7 +99,7 @@ function matchLot(lot, sub) {
 
 function formatLotMessage(lot) {
   const region   = resolveRegion(lot.region);
-  const category = resolveCategory(lot.category, lot.slug);
+  const category = lot.category || "";
   let msg = `🏛 <a href="${lot.url}">${escapeHtml(lot.title)}</a>`;
   if (lot.price)    msg += `\n💰 ${escapeHtml(lot.price)}`;
   if (region)       msg += `\n📍 ${escapeHtml(region)}`;
@@ -147,24 +112,25 @@ function formatLotMessage(lot) {
 // HANDLERS
 // ════════════════════════════════════════════════════════════
 
-// GET /api-lots?page=0&pagesize=50&state=15,16,4,5,18,19,20,21,22,23
+// GET /api-lots?page=1&pagesize=9&sort=start&state=15,16,4,5,18,19,20,21,22,23
 async function handleApiLots(request) {
   const inUrl    = new URL(request.url);
-  const pagesize = parseInt(inUrl.searchParams.get("pagesize") || "50");
+  const pagesize = parseInt(inUrl.searchParams.get("pagesize") || "9");
 
-  // Параметры реального рабочего запроса с сайта (подтверждено через DevTools):
-  //   page, pagesize, sort=start, state=15,16,4,5,18,19,20,21,22,23
-  // category НЕ требуется и не поддерживается как фильтр на этом эндпоинте —
-  // категория лота приходит в каждом объекте лота (lot.category, число) и
-  // фильтруется на нашей стороне, а не через query-параметр API.
-  // state — обязательный параметр: список числовых статусов аукциона
-  // (видимо "опубликован"/"идёт приём заявок" и т.п.), без него API отдаёт
-  // HTTP 200 с телом {"status":400,"message":"Request failed: "}.
-  const params = new URLSearchParams({
+  // ВАЖНО: подтверждённый рабочий запрос с сайта (через DevTools) — ТОЧНО:
+  //   page=1&pagesize=9&sort=start&state=15,16,4,5,18,19,20,21,22,23
+  // API чувствителен к pagesize — другие значения (5, 50) дают
+  // {"status":400,"message":"Request failed: "} при HTTP 200.
+  // category НЕ поддерживается как фильтр здесь — это поле внутри лота.
+  const defaults = {
     sort:  "start",
     state: "15,16,4,5,18,19,20,21,22,23",
-  });
-  // Параметры от парсера перезаписывают дефолты
+  };
+  const params = new URLSearchParams();
+  // Сохраняем порядок: сначала дефолты (если не переопределены), потом входящие
+  for (const [k, v] of Object.entries(defaults)) {
+    if (!inUrl.searchParams.has(k)) params.set(k, v);
+  }
   for (const [k, v] of inUrl.searchParams) {
     params.set(k, v);
   }
@@ -289,12 +255,6 @@ async function handleGetKnownLots(env) {
   return jsonResponse(raw ? JSON.parse(raw) : []);
 }
 
-// GET /categories
-async function handleGetCategories(env) {
-  const raw = await env.TORGIGOV_STORAGE.get("categories");
-  return jsonResponse(raw ? JSON.parse(raw) : []);
-}
-
 // GET /status
 async function handleGetStatus(env) {
   const [last_full_reset, snapshot_ts, last_daily_run] = await Promise.all([
@@ -312,7 +272,6 @@ async function handleSaveDailyRun(body, env) {
     ts,
     date:       body.date       ?? ts.slice(0, 10),
     lots_found: body.lots_found ?? 0,
-    categories: body.categories ?? [],
   }));
   return jsonResponse({ ok: true, ts });
 }
@@ -325,14 +284,6 @@ async function handleSnapshot(body, env) {
   await env.TORGIGOV_STORAGE.put("snapshot_timestamp", ts);
   await env.TORGIGOV_STORAGE.put("last_full_reset", ts);
   return jsonResponse({ ok: true, ts, count: ids.length });
-}
-
-// POST /save-categories  {categories: [...]}
-async function handleSaveCategories(body, env) {
-  const { categories } = body;
-  if (!Array.isArray(categories)) return new Response("Bad categories", { status: 400 });
-  await env.TORGIGOV_STORAGE.put("categories", JSON.stringify(categories));
-  return jsonResponse({ ok: true, count: categories.length });
 }
 
 // POST /add-lots  {lot_ids: [...]}
@@ -393,7 +344,6 @@ export default {
 
       // GET endpoints
       if (method === "GET" && path === "/known-lots")  return handleGetKnownLots(env);
-      if (method === "GET" && path === "/categories")  return handleGetCategories(env);
       if (method === "GET" && path === "/status")      return handleGetStatus(env);
       if (method === "GET" && path === "/api-lots")    return handleApiLots(request);
       if (method === "GET" && path === "/debug-api")   return handleDebugApi();
@@ -403,7 +353,6 @@ export default {
       if (!body) return new Response("Bad JSON", { status: 400 });
 
       if (method === "POST" && path === "/snapshot")           return handleSnapshot(body, env);
-      if (method === "POST" && path === "/save-categories")    return handleSaveCategories(body, env);
       if (method === "POST" && path === "/add-lots")           return handleAddLots(body, env);
       if (method === "POST" && path === "/save-daily-lots")    return handleSaveDailyLots(body, env);
       if (method === "POST" && path === "/send-notifications") return handleSendNotifications(body, env);
