@@ -2,23 +2,29 @@
 torgigov_lib.py — функции парсера torgi.gov.by
 
 Доступ к данным через Cloudflare Worker (api.torgi.gov.by заблокирован с GitHub IP):
-  GET  {WORKER}/api-lots?category=N&page=0&pagesize=50
-       → Worker → api.torgi.gov.by/api/lots → {"lots":[...],"count":N,"totalPages":N}
+  GET  {WORKER}/api-lots?page=0&pagesize=50
+       → Worker → api.torgi.gov.by/api/lots?state=15,16,4,5,18,19,20,21,22,23&sort=start&...
+       → {"lots":[...],"count":N,"totalPages":N}
   POST {WORKER}/fetch-page {url}
        → Worker → torgi.gov.by SSR-страница → {ok, status, html}
 
-ВАЖНО: API torgi.gov.by требует параметр category как обязательный —
-запрос без category возвращает HTTP 200, но с телом {"status":400,...}.
-Поэтому общий список ("Недавно добавленные" с главной страницы) через API
-недоступен напрямую — приходится идти по списку всех категорий.
+ВАЖНО (выяснено через реальный DevTools-запрос с сайта):
+  - category НЕ поддерживается как серверный фильтр на этом эндпоинте.
+    Категория приходит как числовое поле внутри каждого лота (lot["category"])
+    и используется только для отображения (см. CATEGORIES ниже как справочник
+    id → человекочитаемое название).
+  - state — ОБЯЗАТЕЛЬНЫЙ параметр: список числовых статусов аукциона через
+    запятую (типа "опубликован", "идёт приём заявок" и т.п.). Без него API
+    отвечает HTTP 200 с телом {"status":400,"message":"Request failed: "}.
+    Воркер подставляет рабочий набор по умолчанию.
+  - sort=start (не sort1=approvetime, как предполагалось изначально).
 
-Список категорий (CATEGORIES) восстановлен из реального HTML-меню сайта
-(не из устаревшего захардкоженного списка) — 133 категории с точными
-числовыми ID, включая и пустые на момент снятия (могут наполниться позже).
+Парсинг идёт по общему списку (без обхода категорий) — тот же список,
+что показан на главной странице torgi.gov.by под "Недавно добавленные лоты".
 
 Структура ответа API:
-  {"status":200,"result":{"lots":[{id,name,location,numAuction,initialPrice,region,...}],
-                          "totCnt":N,"summary":...}}
+  {"status":200,"result":{"lots":[{id,name,location,numAuction,initialPrice,
+                                    region,category,state,...}],"totCnt":N}}
   Worker разворачивает в: {"lots":[...],"count":N,"totalPages":N}
 """
 
@@ -36,7 +42,8 @@ _SESSION = requests.Session()
 
 
 # ════════════════════════════════════════════════════════════
-# КАТЕГОРИИ — полный список с реальными ID (см. докстринг выше)
+# КАТЕГОРИИ — справочник id → label (НЕ используется как фильтр запроса,
+# только для красивого отображения категории лота в уведомлениях)
 # ════════════════════════════════════════════════════════════
 
 CATEGORIES = [
@@ -176,9 +183,13 @@ CATEGORIES = [
 ]
 
 
-def parse_top_categories() -> list[dict]:
-    """Возвращает полный список категорий (см. CATEGORIES выше)."""
-    return list(CATEGORIES)
+def category_label(category_id) -> str:
+    """Возвращает человекочитаемое название категории по числовому ID."""
+    cid = str(category_id)
+    for c in CATEGORIES:
+        if str(c["category_id"]) == cid:
+            return c["label"]
+    return ""
 
 
 # ════════════════════════════════════════════════════════════
@@ -249,7 +260,7 @@ def _format_price(val) -> str:
         return str(val)
 
 
-def normalize_lot(raw: dict, slug: str = "") -> dict:
+def normalize_lot(raw: dict) -> dict:
     """
     Нормализует объект лота из API.
     Поля из реального ответа: id, name, location, numAuction,
@@ -262,9 +273,8 @@ def normalize_lot(raw: dict, slug: str = "") -> dict:
     return {
         "lot_id":   lot_id,
         "url":      url,
-        "slug":     slug,
         "title":    str(raw.get("name") or ""),
-        "category": str(raw.get("category") or ""),   # числовой ID
+        "category": str(raw.get("category") or ""),   # числовой ID, см. CATEGORIES
         "region":   str(raw.get("region") or ""),     # числовой ID
         "location": str(raw.get("location") or ""),
         "price":    _format_price(raw.get("initialPrice") or raw.get("currentInitialPrice")),
@@ -272,17 +282,16 @@ def normalize_lot(raw: dict, slug: str = "") -> dict:
     }
 
 
-def fetch_lots_page(
-    category_id: int, slug: str = "",
-    page: int = 0, pagesize: int = 50,
-) -> tuple[list[dict], int]:
+def fetch_lots_page(page: int = 0, pagesize: int = 50) -> tuple[list[dict], int]:
     """
-    Запрашивает страницу лотов конкретной категории через Worker /api-lots.
-    API torgi.gov.by требует category как обязательный параметр.
+    Запрашивает страницу общего списка лотов через Worker /api-lots.
+    category НЕ передаётся — это поле есть в каждом лоте (lot["category"]),
+    но не поддерживается как серверный фильтр на этом эндпоинте.
+    Worker сам подставляет обязательный state (список статусов аукциона).
     Возвращает (лоты, totalPages).
     """
     worker_url = f"{cfg.TORGIGOV_WORKER_URL}/api-lots"
-    params     = {"category": category_id, "page": page, "pagesize": pagesize}
+    params     = {"page": page, "pagesize": pagesize}
 
     for attempt in range(1, cfg.REQUEST_RETRIES + 1):
         try:
@@ -328,7 +337,7 @@ def fetch_lots_page(
     if not isinstance(raw_lots, list):
         return [], 0
 
-    lots = [normalize_lot(r, slug) for r in raw_lots if _lot_id(r)]
+    lots = [normalize_lot(r) for r in raw_lots if _lot_id(r)]
     return lots, total_pages
 
 
