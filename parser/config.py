@@ -4,7 +4,7 @@ config.py — все настройки парсеров e-auction.by и rechits
 
 import os
 
-# ════════════════════════════════════════════════════════════ 
+# ════════════════════════════════════════════════════════════
 # ПОДКЛЮЧЕНИЕ К WORKER API
 # Берётся из переменных окружения (GitHub Secrets).
 # ════════════════════════════════════════════════════════════
@@ -122,7 +122,7 @@ RECHITSA_BASE_URL          = "https://rechitsa.by"
 RECHITSA_GOSIM_URL         = "https://rechitsa.by/gosim"
 RECHITSA_MAX_PAGES         = 5      # максимум страниц при поиске новых статей
 RECHITSA_ARTICLE_TEXT_LIMIT = 500   # символов для excerpt уведомления
-RECHITSA_DAILY_TTL_SECONDS = 144
+RECHITSA_DAILY_TTL_SECONDS = 86400
 
 # Паузы rechitsa
 RECHITSA_DELAY_BETWEEN_ARTICLES = 10.0  # между загрузкой полных статей (сек)
@@ -159,23 +159,6 @@ TORGIGOV_BASE_URL = "https://torgi.gov.by"
 TORGIGOV_TOP_LEVEL_CATEGORY_IDS = list(range(1, 14)) + [164, 167]
 
 # ════════════════════════════════════════════════════════════
-# et.butb.by — НАСТРОЙКИ ПАРСЕРА
-# ════════════════════════════════════════════════════════════
- 
-# URL Cloudflare Worker для БУТБ (butb-worker)
-BUTB_WORKER_URL = os.environ.get("BUTB_WORKER_URL", "").rstrip("/")
- 
-BUTB_BASE_URL = "https://et.butb.by"
- 
-# Максимум лотов при первичном слепке
-BUTB_SNAPSHOT_LOTS_LIMIT = 40
- 
-# Те же паузы что и у других парсеров:
-# DELAY_BETWEEN_LIST_PAGES, DELAY_BETWEEN_SECTIONS, DELAY_JITTER, DELAY_MINIMUM
-# Те же параметры алгоритма: FULL_RESET_EVERY_DAYS, DAILY_LOTS_TTL_SECONDS
- 
-
-# ════════════════════════════════════════════════════════════
 # ПРОКСИ — настройки для proxy_pool.py
 # ════════════════════════════════════════════════════════════
 
@@ -210,4 +193,4 @@ ALERT_TELEGRAM_CHAT_ID = os.environ.get("ALERT_TELEGRAM_CHAT_ID", "")
 
 # Размер страницы при запросе API лотов
 SNAPSHOT_PAGE_SIZE = int(os.environ.get("SNAPSHOT_PAGE_SIZE", "50"))
-DAILY_PAGE_SIZE    = int(os.environ.get("DAILY_PAGE_SIZE",    "50"))
+DAILY_PAGE_SIZE    = int(os.environ.get("DAILY_PAGE_SIZE",    "9"))   # torgi.gov.by API: только pagesize=9 подтверждённо работает
