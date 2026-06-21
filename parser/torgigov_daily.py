@@ -4,12 +4,13 @@ torgigov_daily.py — ежедневный парсер новых лотов to
 Алгоритм (общий список, без обхода категорий — выяснено через DevTools,
 что category не поддерживается как серверный фильтр):
   1. GET /known-lots  → set(lot_id)
-  2. GET /api-lots?page=0&pagesize=50 (Worker подставляет обязательный
+  2. GET /api-lots?page=0&pagesize=9 (Worker подставляет обязательный
      state=15,16,4,5,18,19,20,21,22,23 и sort=start)
-     Сравниваем ID с known_lots — находим новые (остановка при первом известном)
+     Сравниваем ID с known_lots — находим новые, останавливаемся только
+     встретив cfg.TORGIGOV_STOP_AFTER_CONSECUTIVE_KNOWN известных подряд
   3. POST /add-lots   → добавляем новые ID
   4. POST /save-daily-lots → сохраняем детали новых лотов
-  5. Ждём NOTIFY_TIME_UTC → POST /send-notifications
+  5. POST /send-notifications сразу — расписание само контролирует время старта
 """
 
 import os
@@ -161,12 +162,14 @@ def parse_daily(known_ids: set[str]) -> list[dict]:
     """
     Запрашивает общий список лотов (без категорий — "Недавно добавленные",
     как на главной странице torgi.gov.by), находит новые.
-    Если все лоты на странице новые — запрашивает следующую.
-    Останавливается при первом известном lot_id.
+    Останавливается, когда подряд встретит cfg.TORGIGOV_STOP_AFTER_CONSECUTIVE_KNOWN
+    известных лотов — единичный "выпавший" известный лот посреди ленты
+    не прерывает сбор более новых лотов дальше.
     """
     all_new: list[dict] = []
-    pagesize = cfg.DAILY_PAGE_SIZE
-    page     = 0
+    pagesize    = cfg.DAILY_PAGE_SIZE
+    stop_after  = cfg.TORGIGOV_STOP_AFTER_CONSECUTIVE_KNOWN
+    page        = 0
 
     while True:
         print(f"  → стр. {page}")
@@ -176,12 +179,13 @@ def parse_daily(known_ids: set[str]) -> list[dict]:
             print(f"  [i] Пустая страница — останавливаю")
             break
 
-        new_on_page = lib.find_new_lots_by_id(lots, known_ids)
+        new_on_page, stopped = lib.find_new_lots_by_id(lots, known_ids, stop_after)
         all_new.extend(new_on_page)
 
-        print(f"     лотов: {len(lots)}, новых: {len(new_on_page)}")
+        print(f"     лотов: {len(lots)}, новых: {len(new_on_page)}"
+              + (" (встретил серию известных — стоп)" if stopped else ""))
 
-        if len(new_on_page) < len(lots):
+        if stopped:
             break
         if page + 1 < total_pages:
             page += 1
@@ -220,16 +224,6 @@ def save_new_lots(new_lots: list[dict]) -> None:
 # ════════════════════════════════════════════════════════════
 # РАССЫЛКА
 # ════════════════════════════════════════════════════════════
-
-def wait_until_notify_time() -> None:
-    hour, minute = map(int, cfg.NOTIFY_TIME_UTC.split(":"))
-    now    = datetime.now(timezone.utc)
-    target = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
-    wait   = (target - now).total_seconds()
-    if wait > 0:
-        print(f"\n[→] Жду до {cfg.NOTIFY_TIME_UTC} UTC ({int(wait // 60)} мин)…")
-        time.sleep(wait)
-
 
 def send_notifications() -> None:
     today = date.today().isoformat()
@@ -299,7 +293,6 @@ def main() -> None:
     save_daily_run(total_new)
 
     if new_lots:
-        wait_until_notify_time()
         print("\n[4] Отправляю уведомления…")
         send_notifications()
     else:

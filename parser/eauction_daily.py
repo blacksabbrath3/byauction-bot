@@ -237,23 +237,6 @@ def fetch_details_and_save(section: str, new_paths: list[str]) -> None:
 # ОЖИДАНИЕ ВРЕМЕНИ ОТПРАВКИ И РАССЫЛКА УВЕДОМЛЕНИЙ
 # ════════════════════════════════════════════════════════════
 
-def wait_until_notify_time() -> None:
-    """
-    Блокирует выполнение до наступления cfg.NOTIFY_TIME_UTC (формат "HH:MM").
-    Если время уже прошло — не ждёт (рассылает сразу).
-    GitHub Actions job не имеет жёсткого лимита для таких пауз (лимит 6 часов).
-    """
-    hour, minute = map(int, cfg.NOTIFY_TIME_UTC.split(":"))
-    now = datetime.now(timezone.utc)
-    target = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
-    wait_sec = (target - now).total_seconds()
-    if wait_sec > 0:
-        print(f"\n[→] Жду до {cfg.NOTIFY_TIME_UTC} UTC ({int(wait_sec // 60)} мин) перед отправкой уведомлений…")
-        time.sleep(wait_sec)
-    else:
-        print(f"\n[→] Время отправки {cfg.NOTIFY_TIME_UTC} UTC уже наступило, рассылаю сразу.")
-
-
 def send_notifications(section_keys: list[str]) -> None:
     """
     POST /send-notifications для каждого раздела в котором были новые лоты.
@@ -289,7 +272,7 @@ def random_delay() -> None:
         return
     max_sec = cfg.RANDOM_DELAY_MAX_SECONDS
     delay = random.randint(0, max_sec)
-    print(f"[i] Рандомная задержка: {delay} сек ({delay // 60} мин). Старт в ~{delay // 3600 + 2}:xx UTC")
+    print(f"[i] Рандомная задержка: {delay} сек ({delay // 60} мин)")
     time.sleep(delay)
 
 
@@ -337,10 +320,9 @@ def main() -> None:
     else:
         print("[i] Полный сброс не нужен.")
 
-    # Шаг 6: Ждём времени отправки и рассылаем уведомления
+    # Шаг 6: Рассылаем уведомления сразу (расписание само контролирует время старта)
     if sections_with_new:
         print(f"\n[6] Разделы с новыми лотами: {', '.join(sections_with_new)}")
-        wait_until_notify_time()
         print("\n[6] Отправляю уведомления подписчикам…")
         send_notifications(sections_with_new)
     else:

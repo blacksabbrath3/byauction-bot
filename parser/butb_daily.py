@@ -8,7 +8,7 @@ butb_daily.py — ежедневный парсер новых лотов et.but
      Если все на странице новые — переходим к следующей странице
   4. POST /add-lots   → регистрируем новые ID
   5. POST /save-daily-lots → сохраняем детали лотов в KV
-  6. Ждём NOTIFY_TIME_UTC → POST /send-notifications
+  6. POST /send-notifications сразу — расписание само контролирует время старта
 
 Особенность et.butb.by:
   Сайт использует ICEFaces (JSF). Пагинация работает через POST формы.
@@ -242,16 +242,6 @@ def save_new_lots(new_lots: list[dict]) -> None:
 # РАССЫЛКА
 # ════════════════════════════════════════════════════════════
 
-def wait_until_notify_time() -> None:
-    hour, minute = map(int, cfg.NOTIFY_TIME_UTC.split(":"))
-    now    = datetime.now(timezone.utc)
-    target = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
-    wait   = (target - now).total_seconds()
-    if wait > 0:
-        print(f"\n[→] Жду до {cfg.NOTIFY_TIME_UTC} UTC ({int(wait // 60)} мин)…")
-        time.sleep(wait)
-
-
 def send_notifications() -> None:
     today = date.today().isoformat()
     print(f"  [→] /send-notifications: all")
@@ -309,7 +299,6 @@ def main() -> None:
         print(f"\n[4] Сохраняю {len(new_lots)} новых лотов…")
         save_new_lots(new_lots)
 
-        wait_until_notify_time()
         print("\n[5] Отправляю уведомления…")
         send_notifications()
     else:

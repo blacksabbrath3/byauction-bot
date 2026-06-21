@@ -7,8 +7,7 @@ rechitsa_daily.py — ежедневный парсер rechitsa.by/gosim
 3. Для каждого нового URL загружаем полную страницу статьи
 4. POST /rechitsa/add-articles  →  добавляем новые URL в known-articles
 5. POST /rechitsa/save-daily-articles  →  сохраняем суточную пачку с деталями
-6. Ждём времени рассылки (NOTIFY_TIME_UTC)
-7. POST /rechitsa/send-notifications  →  рассылаем уведомления подписчикам
+6. POST /rechitsa/send-notifications  →  рассылаем уведомления подписчикам сразу
 """
 
 import os
@@ -33,7 +32,6 @@ import config as cfg
 
 WORKER_URL             = cfg.RECHITSA_WORKER_URL
 API_KEY                = cfg.PARSER_SECRET
-NOTIFY_TIME_UTC        = cfg.NOTIFY_TIME_UTC
 DELAY_BETWEEN_ARTICLES = cfg.RECHITSA_DELAY_BETWEEN_ARTICLES
 DELAY_BETWEEN_PAGES    = cfg.RECHITSA_DELAY_BETWEEN_PAGES
 MAX_PAGES_TO_SCAN      = cfg.RECHITSA_MAX_PAGES
@@ -167,19 +165,6 @@ def save_to_worker(new_articles: list[dict], today: str) -> None:
         log.error(f"save-daily-articles error: {e}")
 
 
-def wait_until_notify_time() -> None:
-    """Ждёт до NOTIFY_TIME_UTC если текущее время раньше."""
-    h, m = map(int, NOTIFY_TIME_UTC.split(":"))
-    now = datetime.datetime.utcnow()
-    target = now.replace(hour=h, minute=m, second=0, microsecond=0)
-    if now < target:
-        wait_sec = (target - now).total_seconds()
-        log.info(f"Ждём до {NOTIFY_TIME_UTC} UTC ({wait_sec:.0f} сек)")
-        time.sleep(wait_sec)
-    else:
-        log.info("Время рассылки уже наступило, отправляем сразу")
-
-
 def send_notifications(today: str) -> None:
     """Запускает рассылку уведомлений через Worker."""
     try:
@@ -227,10 +212,7 @@ def main() -> None:
         # 4. Сохраняем в KV
         save_to_worker(new_articles, today)
 
-    # 5. Всегда ждём 06:00 UTC (09:00 Минск) перед рассылкой
-    wait_until_notify_time()
-
-    # 6. Рассылаем уведомления (Worker сам проверит есть ли пачка за сегодня)
+    # 5. Рассылаем уведомления сразу (расписание само контролирует время старта)
     send_notifications(today)
 
     # 7. Сохраняем дату последнего запуска

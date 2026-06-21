@@ -260,6 +260,29 @@ def _format_price(val) -> str:
         return str(val)
 
 
+_TRANSLIT_MAP = {
+    "а": "a", "б": "b", "в": "v", "г": "g", "д": "d", "е": "e", "ё": "e",
+    "ж": "zh", "з": "z", "и": "i", "й": "j", "к": "k", "л": "l", "м": "m",
+    "н": "n", "о": "o", "п": "p", "р": "r", "с": "s", "т": "t", "у": "u",
+    "ф": "f", "х": "h", "ц": "c", "ч": "ch", "ш": "sh", "щ": "shch",
+    "ъ": "", "ы": "y", "ь": "", "э": "e", "ю": "yu", "я": "ya",
+}
+
+
+def _slugify(title: str) -> str:
+    """
+    Транслитерирует и нормализует заголовок в URL-слаг — так же, как это
+    делает сам torgi.gov.by (пример с сайта: "Автомагазин" → "avtomagazin").
+    Слаг не обязателен для резолва лота (Angular router маршрутизирует
+    по числовым id/auction_id в пути), но придаёт ссылке тот же вид,
+    что показывает сайт.
+    """
+    lowered = title.lower()
+    translit = "".join(_TRANSLIT_MAP.get(ch, ch) for ch in lowered)
+    slug = re.sub(r"[^a-z0-9]+", "-", translit).strip("-")
+    return slug[:60].rstrip("-")
+
+
 def normalize_lot(raw: dict) -> dict:
     """
     Нормализует объект лота из API.
@@ -268,12 +291,19 @@ def normalize_lot(raw: dict) -> dict:
     """
     lot_id     = str(raw.get("id") or "")
     auction_id = str(raw.get("numAuction") or "")
-    url        = f"{BASE_URL}/lot/{lot_id}/{auction_id}/" if lot_id and auction_id else ""
+    title      = str(raw.get("name") or "")
+    slug       = _slugify(title) if title else ""
+
+    if lot_id and auction_id:
+        url = f"{BASE_URL}/lot/{lot_id}/{auction_id}/{slug}" if slug \
+              else f"{BASE_URL}/lot/{lot_id}/{auction_id}"
+    else:
+        url = ""
 
     return {
         "lot_id":   lot_id,
         "url":      url,
-        "title":    str(raw.get("name") or ""),
+        "title":    title,
         "category": str(raw.get("category") or ""),   # числовой ID, см. CATEGORIES
         "region":   str(raw.get("region") or ""),     # числовой ID
         "location": str(raw.get("location") or ""),
@@ -348,20 +378,39 @@ def fetch_lots_page(page: int = 0, pagesize: int = 50) -> tuple[list[dict], int]
 def find_new_lots_by_id(
     fetched_lots: list[dict],
     known_ids: set[str],
-) -> list[dict]:
+    stop_after_consecutive_known: int = 3,
+) -> tuple[list[dict], bool]:
     """
-    Возвращает лоты с неизвестными ID.
-    Останавливается при первом известном — API сортирует по убыванию новизны.
+    Возвращает (новые_лоты, дошли_до_конца_известных).
+    Идёт по списку лотов (API отдаёт по убыванию новизны), собирая все
+    НЕИЗВЕСТНЫЕ лоты — включая те, что встретились между известными.
+    Останавливается, только когда подряд встретит
+    stop_after_consecutive_known известных лотов — единичный "выпавший"
+    известный лот посреди ленты не прерывает сбор (лот мог быть
+    переопубликован, порядок сортировки не всегда идеально строгий).
+
+    Второй элемент кортежа True, если сбор остановлен по достижении серии
+    известных (значит на этой странице/листинге больше новых нет дальше);
+    False, если все лоты на странице оказались новыми (нужно идти на
+    следующую страницу).
     """
     new_lots = []
+    consecutive_known = 0
+
     for lot in fetched_lots:
         lid = lot["lot_id"]
         if not lid:
             continue
+
         if lid in known_ids:
-            break
-        new_lots.append(lot)
-    return new_lots
+            consecutive_known += 1
+            if consecutive_known >= stop_after_consecutive_known:
+                return new_lots, True
+        else:
+            consecutive_known = 0
+            new_lots.append(lot)
+
+    return new_lots, False
 
 
 # ════════════════════════════════════════════════════════════
