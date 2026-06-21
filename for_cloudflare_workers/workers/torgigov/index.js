@@ -1,5 +1,5 @@
 // ============================================================
-// workers/torgigov/index.js 
+// workers/torgigov/index.js
 //
 // Bindings:
 //   KV:      TORGIGOV_STORAGE, SUBSCRIBERS
@@ -172,14 +172,11 @@ async function handleApiLots(request) {
   }
 }
 
-// GET /debug-api
+// GET /debug-api — диагностика подтверждённым рабочим запросом
 async function handleDebugApi() {
-  const results = [];
-
-  // Тест 1: точный URL который уйдёт в api/lots для category=1
   const params = new URLSearchParams({
-    onlyNotActive: "false", history: "false", sort1: "approvetime",
-    category: "1", page: "0", pagesize: "2",
+    page: "0", pagesize: "9",
+    sort: "start", state: "15,16,4,5,18,19,20,21,22,23",
   });
   const apiUrl = `${TORGI_API}/lots?${params.toString()}`;
 
@@ -188,30 +185,16 @@ async function handleDebugApi() {
     const text = await resp.text();
     let parsed = null;
     try { parsed = JSON.parse(text); } catch {}
-    results.push({
-      test:       "api_lots_category1",
+    return jsonResponse({
       apiUrl,
       httpStatus: resp.status,
-      rawBody:    text.slice(0, 600),
-      resultKeys: parsed?.result ? Object.keys(parsed.result) : null,
+      rawBody:    text.slice(0, 800),
       lotsCount:  parsed?.result?.lots?.length ?? parsed?.lots?.length ?? null,
       totalCount: parsed?.result?.totCnt ?? parsed?.result?.count ?? null,
     });
   } catch (e) {
-    results.push({ test: "api_lots_category1", apiUrl, error: e.message });
+    return jsonResponse({ apiUrl, error: e.message }, 502);
   }
-
-  // Тест 2: без category — все лоты
-  const apiUrl2 = `${TORGI_API}/lots?page=0&pagesize=2&onlyNotActive=false&history=false`;
-  try {
-    const resp2 = await fetch(apiUrl2, { headers: API_HEADERS, cf: { cacheTtl: 0 } });
-    const text2 = await resp2.text();
-    results.push({ test: "api_lots_all", apiUrl: apiUrl2, httpStatus: resp2.status, rawBody: text2.slice(0, 300) });
-  } catch (e) {
-    results.push({ test: "api_lots_all", error: e.message });
-  }
-
-  return jsonResponse({ results });
 }
 // Проксирует fetch() к torgi.gov.by для SSR-страниц (главная, страница лота)
 const ALLOWED_HOSTS = ["torgi.gov.by", "api.torgi.gov.by"];
