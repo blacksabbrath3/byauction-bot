@@ -260,6 +260,22 @@ def _format_price(val) -> str:
         return str(val)
 
 
+_DOTNET_TICKS_EPOCH = 621355968000000000  # разница между .NET epoch (0001-01-01) и Unix epoch
+
+
+def _ticks_to_date(ticks) -> str:
+    """Конвертирует .NET ticks в строку 'ДД.ММ.ГГГГ'."""
+    if not ticks:
+        return ""
+    try:
+        unix_seconds = (int(ticks) - _DOTNET_TICKS_EPOCH) / 1e7
+        from datetime import datetime, timezone
+        dt = datetime.fromtimestamp(unix_seconds, tz=timezone.utc)
+        return dt.strftime("%d.%m.%Y")
+    except Exception:
+        return ""
+
+
 _TRANSLIT_MAP = {
     "а": "a", "б": "b", "в": "v", "г": "g", "д": "d", "е": "e", "ё": "e",
     "ж": "zh", "з": "z", "и": "i", "й": "j", "к": "k", "л": "l", "м": "m",
@@ -301,14 +317,16 @@ def normalize_lot(raw: dict) -> dict:
         url = ""
 
     return {
-        "lot_id":   lot_id,
-        "url":      url,
-        "title":    title,
-        "category": str(raw.get("category") or ""),   # числовой ID, см. CATEGORIES
-        "region":   str(raw.get("region") or ""),     # числовой ID
-        "location": str(raw.get("location") or ""),
-        "price":    _format_price(raw.get("initialPrice") or raw.get("currentInitialPrice")),
-        "state":    str(raw.get("state") or ""),
+        "lot_id":        lot_id,
+        "url":           url,
+        "title":         title,
+        "description":   str(raw.get("description") or "").strip(),
+        "category":      str(raw.get("category") or ""),
+        "region":        str(raw.get("region") or ""),
+        "location":      str(raw.get("location") or ""),
+        "price":         _format_price(raw.get("initialPrice") or raw.get("currentInitialPrice")),
+        "auction_start": _ticks_to_date(raw.get("auctionStart")),
+        "state":         str(raw.get("state") or ""),
     }
 
 
