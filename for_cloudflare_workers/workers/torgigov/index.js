@@ -1,5 +1,5 @@
 // ============================================================
-// workers/torgigov/index.js 
+// workers/torgigov/index.js
 //
 // Bindings:
 //   KV:      TORGIGOV_STORAGE, SUBSCRIBERS
@@ -173,11 +173,17 @@ function formatLotMessage(lot) {
   const region   = resolveRegion(lot.region);
   const category = resolveCategory(lot.category);
   let msg = `🏛 <a href="${lot.url}">${escapeHtml(lot.title)}</a>`;
-  if (lot.price)       msg += `\n💰 ${escapeHtml(lot.price)}`;
-  if (region)          msg += `\n📍 ${escapeHtml(region)}`;
-  if (lot.location)    msg += ` — ${escapeHtml(lot.location)}`;
-  if (category)        msg += `\n🏷 ${escapeHtml(category)}`;
-  if (lot.description) msg += `\n📄 ${escapeHtml(lot.description)}`;
+  if (lot.auction_start) msg += `\n📅 Старт: ${escapeHtml(lot.auction_start)}`;
+  if (lot.price)         msg += `\n💰 ${escapeHtml(lot.price)}`;
+  if (region)            msg += `\n📍 ${escapeHtml(region)}`;
+  if (lot.location)      msg += ` — ${escapeHtml(lot.location)}`;
+  if (category)          msg += `\n🏷 ${escapeHtml(category)}`;
+  if (lot.description) {
+    const desc = lot.description.length > 300
+      ? lot.description.slice(0, 300).trimEnd() + "…"
+      : lot.description;
+    msg += `\n📄 ${escapeHtml(desc)}`;
+  }
   return msg;
 }
 
@@ -396,17 +402,19 @@ async function handleSendNotifications(body, env) {
 export default {
   async fetch(request, env) {
     try {
-      if (!checkAuth(request, env)) return new Response("Unauthorized", { status: 401 });
-
       const url    = new URL(request.url);
       const path   = url.pathname;
       const method = request.method;
+
+      // /debug-api публичен — только чтение, меняет данные, удобен для диагностики из браузера
+      if (method === "GET" && path === "/debug-api") return handleDebugApi();
+
+      if (!checkAuth(request, env)) return new Response("Unauthorized", { status: 401 });
 
       // GET endpoints
       if (method === "GET" && path === "/known-lots")  return handleGetKnownLots(env);
       if (method === "GET" && path === "/status")      return handleGetStatus(env);
       if (method === "GET" && path === "/api-lots")    return handleApiLots(request);
-      if (method === "GET" && path === "/debug-api")   return handleDebugApi();
 
       // POST endpoints
       const body = await request.json().catch(() => null);
