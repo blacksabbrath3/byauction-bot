@@ -24,6 +24,7 @@ from datetime import date, datetime, timezone
 import config as cfg
 import torgigov_lib as lib
 import torgigov_snapshot as snapshot_module
+import lot_utils
 
 WORKER_URL    = cfg.TORGIGOV_WORKER_URL
 PARSER_SECRET = cfg.PARSER_SECRET
@@ -167,9 +168,8 @@ def parse_daily(known_ids: set[str]) -> list[dict]:
     не прерывает сбор более новых лотов дальше.
     """
     all_new: list[dict] = []
-    pagesize    = cfg.DAILY_PAGE_SIZE
-    stop_after  = cfg.TORGIGOV_STOP_AFTER_CONSECUTIVE_KNOWN
-    page        = 0
+    pagesize = cfg.DAILY_PAGE_SIZE
+    page     = 0
 
     while True:
         print(f"  → стр. {page}")
@@ -179,7 +179,7 @@ def parse_daily(known_ids: set[str]) -> list[dict]:
             print(f"  [i] Пустая страница — останавливаю")
             break
 
-        new_on_page, stopped = lib.find_new_lots_by_id(lots, known_ids, stop_after)
+        new_on_page, stopped = lot_utils.find_new_lots(lots, known_ids)
         all_new.extend(new_on_page)
 
         print(f"     лотов: {len(lots)}, новых: {len(new_on_page)}"

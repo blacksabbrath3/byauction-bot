@@ -202,9 +202,11 @@ ALERT_TELEGRAM_CHAT_ID = os.environ.get("ALERT_TELEGRAM_CHAT_ID", "")
 SNAPSHOT_PAGE_SIZE = int(os.environ.get("SNAPSHOT_PAGE_SIZE", "50"))
 DAILY_PAGE_SIZE    = int(os.environ.get("DAILY_PAGE_SIZE",    "9"))   # torgi.gov.by API: только pagesize=9 подтверждённо работает
 
-# torgi.gov.by: сколько ИЗВЕСТНЫХ лотов подряд нужно встретить, чтобы
-# остановить дальнейший сбор (защита от единичных "выпадающих" лотов
-# в середине ленты — например, временно снятых и переопубликованных).
-TORGIGOV_STOP_AFTER_CONSECUTIVE_KNOWN = int(
-    os.environ.get("TORGIGOV_STOP_AFTER_CONSECUTIVE_KNOWN", "3")
+# Сколько ИЗВЕСТНЫХ лотов подряд нужно встретить, чтобы прекратить сбор новых.
+# Единичный известный лот посреди ленты не останавливает парсинг — он мог быть
+# временно снят и переопубликован, или порядок API не строго хронологический.
+# Применяется во всех дейли-парсерах через lot_utils.find_new_lots().
+STOP_AFTER_CONSECUTIVE_KNOWN = int(
+    os.environ.get("STOP_AFTER_CONSECUTIVE_KNOWN", "3")
 )
+

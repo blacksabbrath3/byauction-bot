@@ -28,6 +28,7 @@ from datetime import date, datetime, timezone
 import config as cfg
 import butb_lib as lib
 import butb_snapshot as snapshot_module
+import lot_utils
 
 WORKER_URL    = cfg.BUTB_WORKER_URL
 PARSER_SECRET = cfg.PARSER_SECRET
@@ -176,12 +177,12 @@ def parse_daily(known_ids: set[str]) -> list[dict]:
     all_new: list[dict] = []
 
     lots = lib.parse_lots_from_soup(soup)
-    new_on_page = lib.find_new_lots_by_id(lots, known_ids)
+    new_on_page, stopped = lot_utils.find_new_lots(lots, known_ids)
     all_new.extend(new_on_page)
-    print(f"    стр. 1: лотов={len(lots)}, новых={len(new_on_page)}")
+    print(f"    стр. 1: лотов={len(lots)}, новых={len(new_on_page)}"
+          + (" (серия известных — стоп)" if stopped else ""))
 
-    # Функция вернула меньше лотов чем на странице — порог сработал, дальше не идём
-    if len(new_on_page) < len(lots):
+    if stopped:
         return all_new
 
     for page in range(2, total_pages + 1):
@@ -197,12 +198,12 @@ def parse_daily(known_ids: set[str]) -> list[dict]:
             print(f"  [i] Страница {page} пуста — останавливаюсь")
             break
 
-        new_on_page = lib.find_new_lots_by_id(lots, known_ids)
+        new_on_page, stopped = lot_utils.find_new_lots(lots, known_ids)
         all_new.extend(new_on_page)
-        print(f"    стр. {page}: лотов={len(lots)}, новых={len(new_on_page)}")
+        print(f"    стр. {page}: лотов={len(lots)}, новых={len(new_on_page)}"
+              + (" (серия известных — стоп)" if stopped else ""))
 
-        # Порог сработал — дальше не идём
-        if len(new_on_page) < len(lots):
+        if stopped:
             break
 
     return all_new
