@@ -58,40 +58,6 @@ export function inlineTypeChoice(selected = []) {
   ]};
 }
 
-// ── Подписка: категории ───────────────────────────────────────
-
-export function inlineCategories(categories, selected) {
-  const rows = [];
-  for (let i = 0; i < categories.length; i += 2) {
-    rows.push(categories.slice(i, i + 2).map(cat => ({
-      text: `${selected.includes(cat.slug) ? "✅" : "◻️"} ${cat.label}`,
-      callback_data: `sub_c:${cat.slug}`,
-    })));
-  }
-  rows.push([
-    { text: "☑️ Все категории", callback_data: "sub_c:all"  },
-    { text: "✔️ Готово",        callback_data: "sub_c:done" },
-  ]);
-  rows.push([{ text: "❌ Отмена", callback_data: "sub_cancel" }]);
-  return { inline_keyboard: rows };
-}
-
-export function inlineTorgigovCategories(categories, selected) {
-  const rows = [];
-  for (let i = 0; i < categories.length; i += 2) {
-    rows.push(categories.slice(i, i + 2).map(cat => ({
-      text: `${selected.includes(cat.slug) ? "✅" : "◻️"} ${cat.label}`,
-      callback_data: `sub_tgc:${cat.slug}`,
-    })));
-  }
-  rows.push([
-    { text: "☑️ Все категории", callback_data: "sub_tgc:all"  },
-    { text: "✔️ Готово",        callback_data: "sub_tgc:done" },
-  ]);
-  rows.push([{ text: "❌ Отмена", callback_data: "sub_cancel" }]);
-  return { inline_keyboard: rows };
-}
-
 // ── Подписка: регион ──────────────────────────────────────────
 
 export function inlineRegion() {
@@ -204,4 +170,52 @@ export function inlineAddMoreGroups(currentCount) {
     [{ text: "✅ Завершить", callback_data: "sub_kg:done" }],
     [{ text: "❌ Отмена",    callback_data: "sub_cancel"  }],
   ]};
+}
+
+// ── Быстрые слова для ключевых запросов ────────────────────
+
+// Популярные слова разбиты по тематическим группам.
+// При нажатии кнопки слово добавляется через запятую к текущему вводу.
+export const QUICK_WORDS = [
+  // Недвижимость
+  ["квартира", "дом", "склад", "гараж", "офис", "магазин", "земля"],
+  // Транспорт
+  ["авто", "грузовик", "трактор", "прицеп", "спецтехника"],
+  // Оборудование и прочее
+  ["оборудование", "станок", "мебель", "металл", "древесина"],
+];
+
+export function inlineKeywordsWithQuickWords(currentWords = []) {
+  const rows = [];
+
+  // Строки с быстрыми словами (по 3-4 в ряд)
+  for (const group of QUICK_WORDS) {
+    // По 3 слова в ряд
+    for (let i = 0; i < group.length; i += 3) {
+      rows.push(
+        group.slice(i, i + 3).map(word => {
+          const active = currentWords.includes(word);
+          return {
+            text: active ? `✅ ${word}` : word,
+            callback_data: `sub_qw:${word}`,
+          };
+        })
+      );
+    }
+  }
+
+  // Кнопки управления
+  if (currentWords.length > 0) {
+    rows.push([
+      { text: `✔️ Готово (${currentWords.length} сл.)`, callback_data: "sub_kw:done_quick" },
+      { text: "🗑 Очистить",                            callback_data: "sub_qw:clear"      },
+    ]);
+  }
+  rows.push([
+    { text: "⌨️ Ввести вручную", callback_data: "sub_kw:manual" },
+    { text: "⏭ Пропустить",     callback_data: "sub_kw:skip"   },
+  ]);
+  rows.push([{ text: "❌ Отмена", callback_data: "sub_cancel" }]);
+
+  return { inline_keyboard: rows };
 }

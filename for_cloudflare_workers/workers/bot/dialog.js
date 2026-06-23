@@ -3,7 +3,7 @@
  */
 
 import { sendMessage, editMessage, answerCallback, deleteMessage } from "../../shared/telegram.js";
-import { sourceById } from "../../shared/sources.js";
+import { sourceById, physicalSourceIds } from "../../shared/sources.js";
 import {
   getSubs, saveSubs, getDialog, saveDialog, deleteDialog,
 } from "./kv.js";
@@ -12,6 +12,7 @@ import {
   inlineSourceChoice, inlineMultiSourcePick, inlineTypeChoice,
   inlineRegion, inlineOblasts, inlineDistricts, inlineAfterDistrict,
   inlineWordTypeChoice, inlineKeywordsSkip, inlineMaxPriceSkip, inlineAddMoreGroups,
+  inlineKeywordsWithQuickWords,
 } from "./keyboards.js";
 import {
   shortUUID, subSummary,
@@ -80,6 +81,7 @@ async function promptMaxPrice(token, chatId, msgId, userId, dialog, env) {
 async function proceedToLotKeywords(token, chatId, msgId, userId, dialog, env) {
   dialog.data.keywordPhase = "lot";
   dialog.data.keywordGroups = [];
+  dialog.data.quickWords = [];    // сброс быстрых слов при входе в новый шаг
   dialog.step = "keywords_input";
   await saveDialog(env, userId, dialog);
   await clearKeywordsForceReply(token, chatId, dialog);
@@ -100,22 +102,20 @@ async function proceedToLotKeywords(token, chatId, msgId, userId, dialog, env) {
  * сохраняя его ID в dialog.data.kwForceReplyMsgId для последующего удаления.
  */
 async function promptKeywordsInput(token, chatId, msgId, promptText, placeholder, dialog, env, userId) {
+  const quickSelected = dialog?.data?.quickWords || [];
+  const keyboard = inlineKeywordsWithQuickWords(quickSelected);
+
   if (msgId) {
-    await editMessage(token, chatId, msgId, promptText, { reply_markup: inlineKeywordsSkip() });
-    const frMsg = await sendMessage(token, chatId, `✏️ <i>Введите ответ в поле ниже:</i>`, {
-      reply_markup: {
-        force_reply:             true,
-        input_field_placeholder: placeholder || "Слова через запятую...",
-        selective:               true,
-      },
-    });
-    if (dialog && frMsg?.result?.message_id) {
-      dialog.data.kwForceReplyMsgId = frMsg.result.message_id;
-      await saveDialog(env, userId, dialog);
+    await editMessage(token, chatId, msgId, promptText, { reply_markup: keyboard });
+    // force_reply убираем — пользователь либо нажимает быстрые слова,
+    // либо нажимает "Ввести вручную" и тогда уже отправляем force_reply
+    if (dialog?.data?.kwForceReplyMsgId) {
+      await deleteMessage(token, chatId, dialog.data.kwForceReplyMsgId).catch(() => {});
+      delete dialog.data.kwForceReplyMsgId;
     }
-    return frMsg;
+    return;
   } else {
-    return sendMessage(token, chatId, promptText, { reply_markup: inlineKeywordsSkip() });
+    return sendMessage(token, chatId, promptText, { reply_markup: keyboard });
   }
 }
 
@@ -429,6 +429,66 @@ export async function handleCallback(token, update, env) {
         "Например: Гомель, Жлобин", dialog, env, userId);
   }
 
+  // ── Быстрые слова: тоглим слово по нажатию кнопки ─────────────
+  if (data.startsWith("sub_qw:")) {
+    const word = data.slice(7);
+
+    if (word === "clear") {
+      dialog.data.quickWords = [];
+    } else {
+      const qw = dialog.data.quickWords || [];
+      const idx = qw.indexOf(word);
+      if (idx === -1) qw.push(word);
+      else qw.splice(idx, 1);
+      dialog.data.quickWords = qw;
+    }
+
+    await saveDialog(env, userId, dialog);
+    const phase = dialog.data.keywordPhase || "lot";
+    const promptText = keywordsPromptText(dialog.data.source, phase === "region" ? "region" : "lot")
+      + currentGroupsSummary(dialog.data.keywordGroups || []);
+    const keyboard = inlineKeywordsWithQuickWords(dialog.data.quickWords || []);
+    return editMessage(token, chatId, msgId, promptText, { reply_markup: keyboard });
+  }
+
+  // ── Готово — подтвердить быстрые слова как одну группу ─────────
+  if (data === "sub_kw:done_quick") {
+    const qw = dialog.data.quickWords || [];
+    if (qw.length === 0) return answerCallback(token, msgId, "Выберите хотя бы одно слово");
+
+    // Каждое быстрое слово становится отдельной ИЛИ-группой (через запятую)
+    const inputText = qw.join(", ");
+    dialog.data.quickWords = [];
+    await saveDialog(env, userId, dialog);
+
+    // Переиспользуем существующую логику обработки текстового ввода
+    return handleKeywordsText(token, chatId, msgId, userId, dialog, env, inputText);
+  }
+
+  // ── Ручной ввод: показываем force_reply ────────────────────────
+  if (data === "sub_kw:manual") {
+    const phase = dialog.data.keywordPhase || "lot";
+    const placeholder = phase === "region"
+      ? "Гомель, Минская область, ..."
+      : "склад, авто, квартира, ...";
+    // Сначала убираем кнопки быстрых слов, заменяем на простую клавиатуру
+    const promptText = keywordsPromptText(dialog.data.source, phase === "region" ? "region" : "lot")
+      + currentGroupsSummary(dialog.data.keywordGroups || []);
+    await editMessage(token, chatId, msgId, promptText, { reply_markup: inlineKeywordsSkip() });
+    const frMsg = await sendMessage(token, chatId, `✏️ <i>Введите слова через запятую:</i>`, {
+      reply_markup: {
+        force_reply:             true,
+        input_field_placeholder: placeholder,
+        selective:               true,
+      },
+    });
+    if (frMsg?.result?.message_id) {
+      dialog.data.kwForceReplyMsgId = frMsg.result.message_id;
+      await saveDialog(env, userId, dialog);
+    }
+    return frMsg;
+  }
+
   // ── Ключевые слова: пропустить ────────────────────────────────
   if (data === "sub_kw:skip") {
     if (dialog.data.keywordPhase === "region") {
@@ -555,13 +615,13 @@ export async function handleCallback(token, update, env) {
       : dialog.data.keywordPhase === "council"
         ? "region_council"
         : "keywords_input";
+    dialog.data.quickWords = [];  // сброс выбора быстрых слов для новой группы
     await saveDialog(env, userId, dialog);
-    return editMessage(token, chatId, msgId,
-      `📝 Введите слова для группы ${groups.length + 1}:\n\n` +
-      `<b>Пример:</b> <code>Минск, Советская, авто</code>\n\n` +
-      `Слова разделяются запятой — все должны встретиться в тексте.` +
-      currentGroupsSummary(groups),
-      { reply_markup: { inline_keyboard: [[{ text: "❌ Отмена", callback_data: "sub_cancel" }]] } });
+    const phase = dialog.data.keywordPhase || "lot";
+    const promptText = keywordsPromptText(dialog.data.source, phase === "region" ? "region" : "lot")
+      + currentGroupsSummary(groups);
+    return editMessage(token, chatId, msgId, promptText,
+      { reply_markup: inlineKeywordsWithQuickWords([]) });
   }
 
   // ── Завершить ввод групп ──────────────────────────────────────
@@ -626,6 +686,45 @@ export async function handleCallback(token, update, env) {
   }
 }
 
+// ── handleKeywordsText ────────────────────────────────────────
+// Общая логика для обработки введённых ключевых слов —
+// вызывается и из handleTextInDialog, и из sub_kw:done_quick.
+async function handleKeywordsText(token, chatId, msgId, userId, dialog, env, text) {
+  const parsed = parseGroupInput(text);
+  if (parsed.length === 0) {
+    return sendMessage(token, chatId, "⚠️ Введите хотя бы одно слово.");
+  }
+
+  const flatTokensNew = buildFlatTokens(parsed);
+  const group = flatTokensNew.map(t => ({
+    key:         t.key,
+    word:        t.displayWord,
+    type:        "partial",
+    isPhrase:    t.isPhrase,
+    phraseGroup: t.isPhrase ? t.fullPhrase : null,
+  }));
+
+  const groups = activeGroups(dialog);
+  groups.push(group);
+  const groupIndex = groups.length - 1;
+  dialog.step = dialog.data.keywordPhase === "region"
+    ? "region_keywords_select_types"
+    : dialog.data.keywordPhase === "council"
+      ? "council_select_types"
+      : "keywords_select_types";
+  dialog.data.currentParsedParts = parsed;
+  dialog.data.currentFlatTokens  = flatTokensNew;
+
+  const wordTypes = {};
+  group.forEach(w => { wordTypes[w.key] = "partial"; });
+
+  await saveDialog(env, userId, dialog);
+  return sendWordTypeScreen(token, chatId,
+    wordTypesHelpText(),
+    groupSummaryText(group),
+    inlineWordTypeChoice(flatTokensNew, wordTypes, groupIndex));
+}
+
 // ── handleTextInDialog ────────────────────────────────────────
 
 export async function handleTextInDialog(token, chatId, userId, text, env) {
@@ -649,35 +748,7 @@ export async function handleTextInDialog(token, chatId, userId, text, env) {
 
   if (dialog.step === "keywords_input" || dialog.step === "region_keywords_input") {
     await clearKeywordsForceReply(token, chatId, dialog);
-    const parsed = parseGroupInput(text);
-    if (parsed.length === 0) {
-      return sendMessage(token, chatId, "⚠️ Введите хотя бы одно слово.");
-    }
-
-    const flatTokensNew = buildFlatTokens(parsed);
-    const group = flatTokensNew.map(token => ({
-      key:         token.key,
-      word:        token.displayWord,
-      type:        "partial",
-      isPhrase:    token.isPhrase,
-      phraseGroup: token.isPhrase ? token.fullPhrase : null,
-    }));
-
-    const groups = activeGroups(dialog);
-    groups.push(group);
-    const groupIndex = groups.length - 1;
-    dialog.step = dialog.data.keywordPhase === "region" ? "region_keywords_select_types" : dialog.data.keywordPhase === "council" ? "council_select_types" : "keywords_select_types";
-    dialog.data.currentParsedParts = parsed;
-    dialog.data.currentFlatTokens  = flatTokensNew;
-
-    const wordTypes = {};
-    group.forEach(w => { wordTypes[w.key] = "partial"; });
-
-    await saveDialog(env, userId, dialog);
-    return sendWordTypeScreen(token, chatId,
-      wordTypesHelpText(),
-      groupSummaryText(group),
-      inlineWordTypeChoice(flatTokensNew, wordTypes, groupIndex));
+    return handleKeywordsText(token, chatId, null, userId, dialog, env, text);
   }
 
   if (dialog.step === "region_council") {
@@ -763,7 +834,12 @@ export async function finishSubscription(token, chatId, userId, msgId, dialog, e
   const regionCouncilGroups = dialog.data.regionCouncilGroups || [];
 
   if (src === "multi") {
-    sub = { id: shortUUID(), source: "multi", sources: dialog.data.multiSources || [],
+    const selectedIds   = dialog.data.multiSources || [];
+    const physicalIds   = physicalSourceIds(selectedIds);
+    const eauctionTypes = selectedIds
+      .map(id => sourceById(id)?.eauctionType)
+      .filter(Boolean);
+    sub = { id: shortUUID(), source: "multi", sources: physicalIds, eauctionTypes,
             region: dialog.data.region || "all", regionKeywords, regionDistricts, regionCouncilGroups,
             keywords: dialog.data.keywordGroups || [] };
   } else if (src === "rechitsa") {
@@ -804,9 +880,11 @@ export async function sendListMessage(token, chatId, userId, env, editMsgId = nu
     return sendMessage(token, chatId, text);
   }
 
-  const lines = ["📋 <b>Ваши подписки:</b>\n"];
+  const lines = ["📋 <b>Ваши подписки:</b>"];
   subs.forEach((sub, i) => {
-    lines.push(`${i + 1}. ${subSummary(sub)}`);
+    lines.push("");
+    lines.push("➖➖➖➖➖➖➖➖➖➖");
+    lines.push(`<b>${i + 1}.</b> ${subSummary(sub)}`);
   });
 
   const keyboard = {
