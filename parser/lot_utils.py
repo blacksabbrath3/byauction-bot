@@ -13,7 +13,8 @@ def find_new_lots(
     known_ids: set[str],
     id_field: str = "lot_id",
     stop_after_consecutive: int | None = None,
-) -> tuple[list[dict], bool]:
+    _consecutive_in: int = 0,
+) -> tuple[list[dict], bool, int]:
     """
     Находит новые лоты из списка, сравнивая с известными ID.
 
@@ -24,6 +25,8 @@ def find_new_lots(
       (единичный известный лот посреди ленты НЕ прерывает сбор — он мог быть
       временно снят с торгов и переопубликован, или порядок сортировки
       немного нелинейный)
+    - _consecutive_in: текущий счётчик известных подряд с предыдущей страницы
+      (чтобы граница страниц не сбрасывала счётчик)
 
     Параметры:
         fetched_lots: список лотов с текущей страницы API
@@ -31,17 +34,17 @@ def find_new_lots(
         id_field: имя поля с ID в объекте лота (по умолчанию "lot_id")
         stop_after_consecutive: после скольких известных ПОДРЯД останавливаться.
             None — берётся из cfg.STOP_AFTER_CONSECUTIVE_KNOWN (default=3)
+        _consecutive_in: счётчик известных подряд переданный с предыдущей страницы
 
     Возвращает:
-        (новые_лоты, дошли_до_серии_известных)
-        Второй элемент True = можно не запрашивать следующую страницу,
-        False = все лоты на странице новые, нужно идти дальше.
+        (новые_лоты, остановились, счётчик_для_следующей_страницы)
+        Второй элемент True = встретили серию известных, дальше не идти.
     """
     if stop_after_consecutive is None:
         stop_after_consecutive = getattr(cfg, "STOP_AFTER_CONSECUTIVE_KNOWN", 3)
 
     new_lots: list[dict] = []
-    consecutive_known = 0
+    consecutive_known = _consecutive_in
 
     for lot in fetched_lots:
         lid = str(lot.get(id_field) or "")
@@ -51,9 +54,9 @@ def find_new_lots(
         if lid in known_ids:
             consecutive_known += 1
             if consecutive_known >= stop_after_consecutive:
-                return new_lots, True
+                return new_lots, True, consecutive_known
         else:
             consecutive_known = 0
             new_lots.append(lot)
 
-    return new_lots, False
+    return new_lots, False, consecutive_known

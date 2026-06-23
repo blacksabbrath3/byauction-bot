@@ -168,8 +168,9 @@ def parse_daily(known_ids: set[str]) -> list[dict]:
     не прерывает сбор более новых лотов дальше.
     """
     all_new: list[dict] = []
-    pagesize = cfg.DAILY_PAGE_SIZE
-    page     = 0
+    pagesize    = cfg.DAILY_PAGE_SIZE
+    page        = 0
+    consecutive = 0   # счётчик известных подряд — сохраняется между страницами
 
     while True:
         print(f"  → стр. {page}")
@@ -179,11 +180,14 @@ def parse_daily(known_ids: set[str]) -> list[dict]:
             print(f"  [i] Пустая страница — останавливаю")
             break
 
-        new_on_page, stopped = lot_utils.find_new_lots(lots, known_ids)
+        new_on_page, stopped, consecutive = lot_utils.find_new_lots(
+            lots, known_ids, _consecutive_in=consecutive
+        )
         all_new.extend(new_on_page)
 
         print(f"     лотов: {len(lots)}, новых: {len(new_on_page)}"
-              + (" (встретил серию известных — стоп)" if stopped else ""))
+              + (f" (серия {consecutive} известных — стоп)" if stopped else
+                 f" (известных подряд: {consecutive})" if consecutive > 0 else ""))
 
         if stopped:
             break

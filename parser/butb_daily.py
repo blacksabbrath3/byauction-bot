@@ -175,9 +175,12 @@ def parse_daily(known_ids: set[str]) -> list[dict]:
     print(f"[i] Всего страниц: {total_pages}")
 
     all_new: list[dict] = []
+    consecutive = 0   # сохраняется между страницами
 
     lots = lib.parse_lots_from_soup(soup)
-    new_on_page, stopped = lot_utils.find_new_lots(lots, known_ids)
+    new_on_page, stopped, consecutive = lot_utils.find_new_lots(
+        lots, known_ids, _consecutive_in=consecutive
+    )
     all_new.extend(new_on_page)
     print(f"    стр. 1: лотов={len(lots)}, новых={len(new_on_page)}"
           + (" (серия известных — стоп)" if stopped else ""))
@@ -198,7 +201,9 @@ def parse_daily(known_ids: set[str]) -> list[dict]:
             print(f"  [i] Страница {page} пуста — останавливаюсь")
             break
 
-        new_on_page, stopped = lot_utils.find_new_lots(lots, known_ids)
+        new_on_page, stopped, consecutive = lot_utils.find_new_lots(
+            lots, known_ids, _consecutive_in=consecutive
+        )
         all_new.extend(new_on_page)
         print(f"    стр. {page}: лотов={len(lots)}, новых={len(new_on_page)}"
               + (" (серия известных — стоп)" if stopped else ""))
