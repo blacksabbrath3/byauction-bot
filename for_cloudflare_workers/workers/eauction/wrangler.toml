@@ -4,8 +4,10 @@ compatibility_date = "2024-01-01"
 
 [[kv_namespaces]]
 binding = "EAUCTION_STORAGE"
-id = "fc0ea0cb166b40df8313f62d3bbf1d2e"
+id = "REPLACE_WITH_EAUCTION_KV_ID"
 
 [[kv_namespaces]]
 binding = "SUBSCRIBERS"
-id = "c1f5a6b255264509ac2ed8f24bf9c511"
+id = "REPLACE_WITH_SUBSCRIBERS_KV_ID"
+
+# Secrets: BOT_TOKEN, PARSER_SECRET
