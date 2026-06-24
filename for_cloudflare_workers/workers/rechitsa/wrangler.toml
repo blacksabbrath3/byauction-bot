@@ -4,10 +4,10 @@ compatibility_date = "2024-01-01"
 
 [[kv_namespaces]]
 binding = "RECHITSA_STORAGE"
-id = "REPLACE_WITH_RECHITSA_KV_ID"
+id = "9c419a064d7042d89bd214c99b770383"
 
 [[kv_namespaces]]
 binding = "SUBSCRIBERS"
-id = "REPLACE_WITH_SUBSCRIBERS_KV_ID"
+id = "c1f5a6b255264509ac2ed8f24bf9c511"
 
 # Secrets: BOT_TOKEN, PARSER_SECRET
