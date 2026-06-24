@@ -17,6 +17,10 @@ jobs:
       - name: Install dependencies
         run: npm install
         working-directory: for_cloudflare_workers
+      - name: Set KV namespace IDs
+        run: |
+          sed -i "s/REPLACE_WITH_SUBSCRIBERS_KV_ID/${{ secrets.KV_SUBSCRIBERS_ID }}/g" \
+            for_cloudflare_workers/workers/bot/wrangler.toml
       - name: Deploy bot-worker
         uses: cloudflare/wrangler-action@v3
         with:
@@ -43,6 +47,12 @@ jobs:
       - name: Install dependencies
         run: npm install
         working-directory: for_cloudflare_workers
+      - name: Set KV namespace IDs
+        run: |
+          sed -i "s/REPLACE_WITH_EAUCTION_KV_ID/${{ secrets.KV_EAUCTION_ID }}/g" \
+            for_cloudflare_workers/workers/eauction/wrangler.toml
+          sed -i "s/REPLACE_WITH_SUBSCRIBERS_KV_ID/${{ secrets.KV_SUBSCRIBERS_ID }}/g" \
+            for_cloudflare_workers/workers/eauction/wrangler.toml
       - name: Deploy eauction-worker
         uses: cloudflare/wrangler-action@v3
         with:
@@ -60,6 +70,12 @@ jobs:
       - name: Install dependencies
         run: npm install
         working-directory: for_cloudflare_workers
+      - name: Set KV namespace IDs
+        run: |
+          sed -i "s/REPLACE_WITH_RECHITSA_KV_ID/${{ secrets.KV_RECHITSA_ID }}/g" \
+            for_cloudflare_workers/workers/rechitsa/wrangler.toml
+          sed -i "s/REPLACE_WITH_SUBSCRIBERS_KV_ID/${{ secrets.KV_SUBSCRIBERS_ID }}/g" \
+            for_cloudflare_workers/workers/rechitsa/wrangler.toml
       - name: Deploy rechitsa-worker
         uses: cloudflare/wrangler-action@v3
         with:
@@ -77,6 +93,12 @@ jobs:
       - name: Install dependencies
         run: npm install
         working-directory: for_cloudflare_workers
+      - name: Set KV namespace IDs
+        run: |
+          sed -i "s/REPLACE_WITH_TORGIGOV_KV_ID/${{ secrets.KV_TORGIGOV_ID }}/g" \
+            for_cloudflare_workers/workers/torgigov/wrangler.toml
+          sed -i "s/REPLACE_WITH_SUBSCRIBERS_KV_ID/${{ secrets.KV_SUBSCRIBERS_ID }}/g" \
+            for_cloudflare_workers/workers/torgigov/wrangler.toml
       - name: Deploy torgigov-worker
         uses: cloudflare/wrangler-action@v3
         with:
@@ -94,6 +116,12 @@ jobs:
       - name: Install dependencies
         run: npm install
         working-directory: for_cloudflare_workers
+      - name: Set KV namespace IDs
+        run: |
+          sed -i "s/REPLACE_WITH_KV_ID/${{ secrets.KV_BUTB_ID }}/g" \
+            for_cloudflare_workers/workers/butb/wrangler.toml
+          sed -i "s/REPLACE_WITH_SUBSCRIBERS_KV_ID/${{ secrets.KV_SUBSCRIBERS_ID }}/g" \
+            for_cloudflare_workers/workers/butb/wrangler.toml
       - name: Deploy butb-worker
         uses: cloudflare/wrangler-action@v3
         with:
