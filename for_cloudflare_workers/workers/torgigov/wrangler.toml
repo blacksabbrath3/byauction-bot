@@ -4,12 +4,10 @@ compatibility_date = "2024-01-01"
 
 [[kv_namespaces]]
 binding = "TORGIGOV_STORAGE"
-id = "e08ad53d8fe44371873429d627a7a22f"
+id = "REPLACE_WITH_TORGIGOV_KV_ID"
 
 [[kv_namespaces]]
 binding = "SUBSCRIBERS"
-id = "c1f5a6b255264509ac2ed8f24bf9c511"
+id = "REPLACE_WITH_SUBSCRIBERS_KV_ID"
 
-# Secrets (set via wrangler secret put или Cloudflare Dashboard):
-# BOT_TOKEN
-# PARSER_SECRET
+# Secrets: BOT_TOKEN, PARSER_SECRET
