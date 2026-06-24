@@ -104,21 +104,16 @@ async function proceedToLotKeywords(token, chatId, msgId, userId, dialog, env) {
  */
 async function promptKeywordsInput(token, chatId, msgId, promptText, placeholder, dialog, env, userId) {
   const quickSelected = dialog?.data?.quickWords || [];
+  const phase = dialog?.data?.keywordPhase || "lot";
+  const isLotPhase = phase === "lot";
 
-  // Показываем reply_keyboard (слова над полем ввода) + инлайн-кнопки управления
-  // Два отдельных сообщения нельзя совместить, поэтому:
-  // 1. Основное сообщение — editMessage с инлайн-кнопками (Готово/Пропустить/Отмена)
-  // 2. Отдельное sendMessage с reply_keyboard для показа кнопок слов над полем
   if (msgId) {
     await editMessage(token, chatId, msgId, promptText,
-      { reply_markup: inlineKeywordsControl(quickSelected) });
-    // Сохраняем ID сообщения с инлайн-кнопками для обновления счётчика
-    if (dialog) {
-      dialog.data.kwPromptMsgId = msgId;
-    }
+      { reply_markup: isLotPhase ? inlineKeywordsControl(quickSelected) : inlineKeywordsSkip() });
+    if (dialog) dialog.data.kwPromptMsgId = msgId;
   }
 
-  // Убираем старый force_reply если был
+  // Убираем старые сообщения с reply/force_reply клавиатурами
   if (dialog?.data?.kwForceReplyMsgId) {
     await deleteMessage(token, chatId, dialog.data.kwForceReplyMsgId).catch(() => {});
     delete dialog.data.kwForceReplyMsgId;
@@ -128,17 +123,36 @@ async function promptKeywordsInput(token, chatId, msgId, promptText, placeholder
     delete dialog.data.kwReplyKeyboardMsgId;
   }
 
-  // Отправляем reply_keyboard — она появляется над полем ввода
-  const rkMsg = await sendMessage(
-    token, chatId,
-    `💡 <i>Нажмите слова ниже или напишите своё. Несколько слов через запятую — это условие ИЛИ.</i>`,
-    { reply_markup: replyKeywordsKeyboard() }
-  );
-  if (dialog && rkMsg?.result?.message_id) {
-    dialog.data.kwReplyKeyboardMsgId = rkMsg.result.message_id;
-    await saveDialog(env, userId, dialog);
+  // Reply_keyboard с быстрыми словами — только для фазы лота
+  if (isLotPhase) {
+    const rkMsg = await sendMessage(
+      token, chatId,
+      `💡 <i>Нажмите слова ниже или напишите своё. Несколько слов через запятую — это условие ИЛИ.</i>`,
+      { reply_markup: replyKeywordsKeyboard() }
+    );
+    if (dialog && rkMsg?.result?.message_id) {
+      dialog.data.kwReplyKeyboardMsgId = rkMsg.result.message_id;
+      await saveDialog(env, userId, dialog);
+    }
+    return rkMsg;
+  } else {
+    // Для региона и совета — обычный force_reply без быстрых слов
+    if (!msgId) {
+      return sendMessage(token, chatId, promptText, { reply_markup: inlineKeywordsSkip() });
+    }
+    const frMsg = await sendMessage(token, chatId, `✏️ <i>Введите населённые пункты через запятую:</i>`, {
+      reply_markup: {
+        force_reply:             true,
+        input_field_placeholder: placeholder || "Гомель, Минск, ...",
+        selective:               true,
+      },
+    });
+    if (dialog && frMsg?.result?.message_id) {
+      dialog.data.kwForceReplyMsgId = frMsg.result.message_id;
+      await saveDialog(env, userId, dialog);
+    }
+    return frMsg;
   }
-  return rkMsg;
 }
 
 /** Удаляет висящее force_reply сообщение ввода ключевых слов если оно есть. */
