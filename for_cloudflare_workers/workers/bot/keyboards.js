@@ -185,26 +185,39 @@ export const QUICK_WORDS = [
   ["оборудование", "станок", "мебель", "металл", "древесина"],
 ];
 
-export function inlineKeywordsWithQuickWords(currentWords = []) {
-  const rows = [];
+// Плоский Set всех быстрых слов — для проверки в text-handler
+export const ALL_QUICK_WORDS = new Set(QUICK_WORDS.flat());
 
-  // Строки с быстрыми словами (по 3-4 в ряд)
+/**
+ * reply_keyboard с быстрыми словами — отображается над полем ввода.
+ * Нажатие на кнопку отправляет слово как обычное сообщение, которое
+ * dialog.js перехватывает и добавляет в накопленный список quick-слов.
+ * resize_keyboard + one_time_keyboard убираются явно.
+ */
+export function replyKeywordsKeyboard() {
+  const rows = [];
   for (const group of QUICK_WORDS) {
-    // По 3 слова в ряд
     for (let i = 0; i < group.length; i += 3) {
-      rows.push(
-        group.slice(i, i + 3).map(word => {
-          const active = currentWords.includes(word);
-          return {
-            text: active ? `✅ ${word}` : word,
-            callback_data: `sub_qw:${word}`,
-          };
-        })
-      );
+      rows.push(group.slice(i, i + 3).map(word => ({ text: word })));
     }
   }
+  return {
+    keyboard: rows,
+    resize_keyboard:   true,
+    one_time_keyboard: false,
+    input_field_placeholder: "Нажмите слово или напишите своё…",
+    selective: true,
+  };
+}
 
-  // Кнопки управления
+/** Убирает reply_keyboard (после завершения выбора). */
+export function removeReplyKeyboard() {
+  return { remove_keyboard: true, selective: true };
+}
+
+/** Инлайн-кнопки управления поверх reply_keyboard (Готово / Очистить / Пропустить / Отмена). */
+export function inlineKeywordsControl(currentWords = []) {
+  const rows = [];
   if (currentWords.length > 0) {
     rows.push([
       { text: `✔️ Готово (${currentWords.length} сл.)`, callback_data: "sub_kw:done_quick" },
@@ -212,10 +225,8 @@ export function inlineKeywordsWithQuickWords(currentWords = []) {
     ]);
   }
   rows.push([
-    { text: "⌨️ Ввести вручную", callback_data: "sub_kw:manual" },
-    { text: "⏭ Пропустить",     callback_data: "sub_kw:skip"   },
+    { text: "⏭ Пропустить", callback_data: "sub_kw:skip"   },
+    { text: "❌ Отмена",     callback_data: "sub_cancel"    },
   ]);
-  rows.push([{ text: "❌ Отмена", callback_data: "sub_cancel" }]);
-
   return { inline_keyboard: rows };
 }
