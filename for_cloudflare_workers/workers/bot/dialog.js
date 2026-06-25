@@ -12,8 +12,7 @@ import {
   inlineSourceChoice, inlineMultiSourcePick, inlineTypeChoice,
   inlineRegion, inlineOblasts, inlineDistricts, inlineAfterDistrict,
   inlineWordTypeChoice, inlineKeywordsSkip, inlineMaxPriceSkip, inlineAddMoreGroups,
-  inlineKeywordsWithQuickWords, replyKeywordsKeyboard, removeReplyKeyboard,
-  inlineKeywordsControl, ALL_QUICK_WORDS,
+  replyKeywordsKeyboard, inlineKeywordsControl, ALL_QUICK_WORDS,
 } from "./keyboards.js";
 import {
   shortUUID, subSummary,
