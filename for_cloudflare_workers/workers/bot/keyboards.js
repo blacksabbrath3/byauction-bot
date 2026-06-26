@@ -176,57 +176,134 @@ export function inlineAddMoreGroups(currentCount) {
 
 // Популярные слова разбиты по тематическим группам.
 // При нажатии кнопки слово добавляется через запятую к текущему вводу.
-export const QUICK_WORDS = [
-  // Недвижимость
-  ["квартира", "дом", "склад", "гараж", "офис", "магазин", "земля"],
-  // Транспорт
-  ["авто", "грузовик", "трактор", "прицеп", "спецтехника"],
-  // Оборудование и прочее
-  ["оборудование", "станок", "мебель", "металл", "древесина"],
+// ── Быстрые слова по категориям ──────────────────────────────
+
+export const QUICK_WORD_CATEGORIES = [
+  {
+    id:    "realty",
+    label: "🏠 Недвижимость",
+    words: ["квартира", "дом", "дача", "склад", "гараж", "офис", "магазин",
+            "земля", "участок", "здание", "помещение", "цех"],
+  },
+  {
+    id:    "transport",
+    label: "🚗 Транспорт",
+    words: ["авто", "легковой", "грузовик", "автобус", "трактор",
+            "прицеп", "мотоцикл", "спецтехника", "экскаватор", "кран"],
+  },
+  {
+    id:    "equipment",
+    label: "⚙️ Оборудование",
+    words: ["оборудование", "станок", "пресс", "компрессор",
+            "генератор", "насос", "котёл", "трансформатор"],
+  },
+  {
+    id:    "furniture",
+    label: "🪑 Мебель и быт",
+    words: ["мебель", "стол", "шкаф", "холодильник", "телевизор",
+            "стиральная", "кресло", "диван"],
+  },
+  {
+    id:    "materials",
+    label: "🧱 Материалы и сырьё",
+    words: ["металл", "древесина", "лес", "пиломатериалы",
+            "кирпич", "бетон", "кабель", "труба"],
+  },
+  {
+    id:    "other",
+    label: "📦 Прочее",
+    words: ["инструмент", "запчасти", "животные", "продукты",
+            "ткань", "одежда", "компьютер", "телефон"],
+  },
 ];
 
-// Плоский Set всех быстрых слов — для проверки в text-handler
-export const ALL_QUICK_WORDS = new Set(QUICK_WORDS.flat());
+// Плоский Set всех быстрых слов — для перехвата текстовых сообщений в dialog.js
+export const ALL_QUICK_WORDS = new Set(
+  QUICK_WORD_CATEGORIES.flatMap(c => c.words)
+);
 
 /**
- * reply_keyboard с быстрыми словами — отображается над полем ввода.
- * Нажатие на кнопку отправляет слово как обычное сообщение, которое
- * dialog.js перехватывает и добавляет в накопленный список quick-слов.
- * resize_keyboard + one_time_keyboard убираются явно.
+ * reply_keyboard с быстрыми словами выбранной категории.
+ * Нажатие отправляет слово как текст — dialog.js его перехватывает.
  */
-export function replyKeywordsKeyboard() {
+export function replyKeywordsKeyboard(words) {
   const rows = [];
-  for (const group of QUICK_WORDS) {
-    for (let i = 0; i < group.length; i += 3) {
-      rows.push(group.slice(i, i + 3).map(word => ({ text: word })));
-    }
+  for (let i = 0; i < words.length; i += 3) {
+    rows.push(words.slice(i, i + 3).map(word => ({ text: word })));
   }
   return {
-    keyboard: rows,
-    resize_keyboard:   true,
-    one_time_keyboard: false,
+    keyboard:                rows,
+    resize_keyboard:         true,
+    one_time_keyboard:       false,
     input_field_placeholder: "Нажмите слово или напишите своё…",
-    selective: true,
+    selective:               true,
   };
 }
 
-/** Убирает reply_keyboard (после завершения выбора). */
+/** Убирает reply_keyboard. */
 export function removeReplyKeyboard() {
   return { remove_keyboard: true, selective: true };
 }
 
-/** Инлайн-кнопки управления поверх reply_keyboard (Готово / Очистить / Пропустить / Отмена). */
-export function inlineKeywordsControl(currentWords = []) {
+/** Инлайн-список категорий для выбора (первый экран). */
+export function inlineCategoryPick(openCategoryId = null) {
+  const rows = QUICK_WORD_CATEGORIES.map(cat => {
+    const isOpen = cat.id === openCategoryId;
+    return [{ text: isOpen ? `▾ ${cat.label}` : `▸ ${cat.label}`, callback_data: `sub_cat:${cat.id}` }];
+  });
+  return rows;
+}
+
+/** Инлайн-строки слов выбранной категории (показываются под заголовком категории). */
+export function inlineCategoryWords(cat, selectedWords) {
   const rows = [];
-  if (currentWords.length > 0) {
+  for (let i = 0; i < cat.words.length; i += 3) {
+    rows.push(cat.words.slice(i, i + 3).map(word => ({
+      text:          selectedWords.includes(word) ? `✅ ${word}` : word,
+      callback_data: `sub_qw:${word}`,
+    })));
+  }
+  return rows;
+}
+
+/**
+ * Полная инлайн-клавиатура экрана быстрых слов.
+ * openCategoryId: какая категория раскрыта (null = все свёрнуты).
+ * selectedWords: уже выбранные слова (отмечаются ✅).
+ */
+export function inlineKeywordsControl(selectedWords = [], openCategoryId = null) {
+  const rows = [];
+
+  for (const cat of QUICK_WORD_CATEGORIES) {
+    // Заголовок категории
+    const isOpen = cat.id === openCategoryId;
+    rows.push([{
+      text:          isOpen ? `▾ ${cat.label}` : `▸ ${cat.label}`,
+      callback_data: `sub_cat:${cat.id}`,
+    }]);
+
+    // Слова раскрытой категории
+    if (isOpen) {
+      for (let i = 0; i < cat.words.length; i += 3) {
+        rows.push(cat.words.slice(i, i + 3).map(word => ({
+          text:          selectedWords.includes(word) ? `✅ ${word}` : word,
+          callback_data: `sub_qw:${word}`,
+        })));
+      }
+    }
+  }
+
+  // Кнопки управления
+  if (selectedWords.length > 0) {
     rows.push([
-      { text: `✔️ Готово (${currentWords.length} сл.)`, callback_data: "sub_kw:done_quick" },
-      { text: "🗑 Очистить",                            callback_data: "sub_qw:clear"      },
+      { text: `✔️ Готово (${selectedWords.length} сл.)`, callback_data: "sub_kw:done_quick" },
+      { text: "🗑 Очистить",                             callback_data: "sub_qw:clear"       },
     ]);
   }
   rows.push([
     { text: "⏭ Пропустить", callback_data: "sub_kw:skip"   },
     { text: "❌ Отмена",     callback_data: "sub_cancel"    },
   ]);
+
   return { inline_keyboard: rows };
 }

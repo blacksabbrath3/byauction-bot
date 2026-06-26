@@ -12,7 +12,7 @@ import {
   inlineSourceChoice, inlineMultiSourcePick, inlineTypeChoice,
   inlineRegion, inlineOblasts, inlineDistricts, inlineAfterDistrict,
   inlineWordTypeChoice, inlineKeywordsSkip, inlineMaxPriceSkip, inlineAddMoreGroups,
-  replyKeywordsKeyboard, inlineKeywordsControl, ALL_QUICK_WORDS,
+  inlineKeywordsControl,
 } from "./keyboards.js";
 import {
   shortUUID, subSummary,
@@ -102,17 +102,12 @@ async function proceedToLotKeywords(token, chatId, msgId, userId, dialog, env) {
  * сохраняя его ID в dialog.data.kwForceReplyMsgId для последующего удаления.
  */
 async function promptKeywordsInput(token, chatId, msgId, promptText, placeholder, dialog, env, userId) {
-  const quickSelected = dialog?.data?.quickWords || [];
-  const phase = dialog?.data?.keywordPhase || "lot";
-  const isLotPhase = phase === "lot";
+  const quickSelected  = dialog?.data?.quickWords    || [];
+  const openCategoryId = dialog?.data?.openCategory  || null;
+  const phase          = dialog?.data?.keywordPhase  || "lot";
+  const isLotPhase     = phase === "lot";
 
-  if (msgId) {
-    await editMessage(token, chatId, msgId, promptText,
-      { reply_markup: isLotPhase ? inlineKeywordsControl(quickSelected) : inlineKeywordsSkip() });
-    if (dialog) dialog.data.kwPromptMsgId = msgId;
-  }
-
-  // Убираем старые сообщения с reply/force_reply клавиатурами
+  // Убираем старые reply/force_reply клавиатуры
   if (dialog?.data?.kwForceReplyMsgId) {
     await deleteMessage(token, chatId, dialog.data.kwForceReplyMsgId).catch(() => {});
     delete dialog.data.kwForceReplyMsgId;
@@ -122,30 +117,27 @@ async function promptKeywordsInput(token, chatId, msgId, promptText, placeholder
     delete dialog.data.kwReplyKeyboardMsgId;
   }
 
-  // Reply_keyboard с быстрыми словами — только для фазы лота
   if (isLotPhase) {
-    const rkMsg = await sendMessage(
-      token, chatId,
-      `💡 <i>Нажмите слова ниже или напишите своё. Несколько слов через запятую — это условие ИЛИ.</i>`,
-      { reply_markup: replyKeywordsKeyboard() }
-    );
-    if (dialog && rkMsg?.result?.message_id) {
-      dialog.data.kwReplyKeyboardMsgId = rkMsg.result.message_id;
-      await saveDialog(env, userId, dialog);
+    // Категории слов — всё в одном инлайн-сообщении (без отдельной reply_keyboard)
+    const keyboard = inlineKeywordsControl(quickSelected, openCategoryId);
+    if (msgId) {
+      if (dialog) dialog.data.kwPromptMsgId = msgId;
+      return editMessage(token, chatId, msgId, promptText, { reply_markup: keyboard });
     }
-    return rkMsg;
+    return sendMessage(token, chatId, promptText, { reply_markup: keyboard });
   } else {
-    // Для региона и совета — обычный force_reply без быстрых слов
-    if (!msgId) {
-      return sendMessage(token, chatId, promptText, { reply_markup: inlineKeywordsSkip() });
+    // Для региона/совета — обычная клавиатура «Пропустить» + force_reply
+    if (msgId) {
+      await editMessage(token, chatId, msgId, promptText, { reply_markup: inlineKeywordsSkip() });
     }
-    const frMsg = await sendMessage(token, chatId, `✏️ <i>Введите населённые пункты через запятую:</i>`, {
-      reply_markup: {
-        force_reply:             true,
-        input_field_placeholder: placeholder || "Гомель, Минск, ...",
-        selective:               true,
-      },
-    });
+    const frMsg = await sendMessage(token, chatId,
+      `✏️ <i>Введите населённые пункты через запятую:</i>`, {
+        reply_markup: {
+          force_reply:             true,
+          input_field_placeholder: placeholder || "Гомель, Минск, …",
+          selective:               true,
+        },
+      });
     if (dialog && frMsg?.result?.message_id) {
       dialog.data.kwForceReplyMsgId = frMsg.result.message_id;
       await saveDialog(env, userId, dialog);
@@ -473,6 +465,22 @@ export async function handleCallback(token, update, env) {
         "Например: Гомель, Жлобин", dialog, env, userId);
   }
 
+  // ── Категория быстрых слов: раскрыть / свернуть ────────────────
+  if (data.startsWith("sub_cat:")) {
+    const catId = data.slice(8);
+    // Повторное нажатие на открытую категорию — свернуть
+    const current = dialog.data.openCategory;
+    dialog.data.openCategory = (current === catId) ? null : catId;
+    await saveDialog(env, userId, dialog);
+
+    const phase = dialog.data.keywordPhase || "lot";
+    const promptText = keywordsPromptText(dialog.data.source, phase === "region" ? "region" : "lot")
+      + currentGroupsSummary(dialog.data.keywordGroups || []);
+    return editMessage(token, chatId, msgId, promptText, {
+      reply_markup: inlineKeywordsControl(dialog.data.quickWords || [], dialog.data.openCategory),
+    });
+  }
+
   // ── Быстрые слова: тоглим слово по нажатию кнопки ─────────────
   if (data.startsWith("sub_qw:")) {
     const word = data.slice(7);
@@ -488,12 +496,12 @@ export async function handleCallback(token, update, env) {
     }
 
     await saveDialog(env, userId, dialog);
-    // Обновляем инлайн-кнопки управления (счётчик)
     const phase = dialog.data.keywordPhase || "lot";
     const promptText = keywordsPromptText(dialog.data.source, phase === "region" ? "region" : "lot")
       + currentGroupsSummary(dialog.data.keywordGroups || []);
-    return editMessage(token, chatId, msgId, promptText,
-      { reply_markup: inlineKeywordsControl(dialog.data.quickWords || []) });
+    return editMessage(token, chatId, msgId, promptText, {
+      reply_markup: inlineKeywordsControl(dialog.data.quickWords || [], dialog.data.openCategory || null),
+    });
   }
 
   // ── Готово — подтвердить быстрые слова как одну группу ─────────
@@ -636,7 +644,8 @@ export async function handleCallback(token, update, env) {
       : dialog.data.keywordPhase === "council"
         ? "region_council"
         : "keywords_input";
-    dialog.data.quickWords = [];
+    dialog.data.quickWords    = [];
+    dialog.data.openCategory  = null;
     dialog.data.kwPromptMsgId = msgId;
     await saveDialog(env, userId, dialog);
     const phase = dialog.data.keywordPhase || "lot";
@@ -769,42 +778,14 @@ export async function handleTextInDialog(token, chatId, userId, text, env) {
   }
 
   if (dialog.step === "keywords_input" || dialog.step === "region_keywords_input") {
-    // Если пользователь нажал кнопку из reply_keyboard (одно из быстрых слов) —
-    // накапливаем, обновляем счётчик на инлайн-кнопке, НЕ завершаем ввод
-    if (ALL_QUICK_WORDS.has(text.trim().toLowerCase())) {
-      const word = text.trim().toLowerCase();
-      const qw   = dialog.data.quickWords || [];
-      if (!qw.includes(word)) qw.push(word);
-      else qw.splice(qw.indexOf(word), 1); // повторное нажатие = удалить
-
-      dialog.data.quickWords = qw;
-      await saveDialog(env, userId, dialog);
-
-      // Обновляем инлайн-кнопки управления чтобы показать счётчик (Готово N сл.)
-      // Ищем последнее сообщение с инлайн-кнопками управления — это сообщение с promptText
-      // Проще всего отправить новое маленькое сообщение-подтверждение и обновить его при следующем нажатии
-      if (!dialog.data.kwControlMsgId) {
-        const phase = dialog.data.keywordPhase || "lot";
-        const promptMsgId = dialog.data.kwPromptMsgId;
-        if (promptMsgId) {
-          const promptText = keywordsPromptText(dialog.data.source, phase === "region" ? "region" : "lot")
-            + currentGroupsSummary(dialog.data.keywordGroups || []);
-          await editMessage(token, chatId, promptMsgId, promptText,
-            { reply_markup: inlineKeywordsControl(qw) }).catch(() => {});
-        }
-      }
-      return; // не продолжаем — ждём следующего нажатия или Готово
-    }
-
-    // Произвольный текст — завершаем reply_keyboard и обрабатываем как обычный ввод.
-    // Если при этом в quickWords уже что-то накоплено — объединяем всё вместе.
+    // Свободный текстовый ввод — объединяем с уже выбранными через инлайн-кнопки словами
     const qw = dialog.data.quickWords || [];
     let combined = text.trim();
     if (qw.length > 0) {
       combined = [...qw, ...combined.split(",").map(s => s.trim()).filter(Boolean)].join(", ");
-      dialog.data.quickWords = [];
+      dialog.data.quickWords   = [];
+      dialog.data.openCategory = null;
     }
-
     await clearKeywordsForceReply(token, chatId, dialog);
     return handleKeywordsText(token, chatId, null, userId, dialog, env, combined);
   }
