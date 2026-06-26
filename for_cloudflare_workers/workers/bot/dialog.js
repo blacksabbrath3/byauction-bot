@@ -504,16 +504,25 @@ export async function handleCallback(token, update, env) {
     });
   }
 
-  // ── Готово — подтвердить быстрые слова как одну группу ─────────
+  // ── Готово — каждое выбранное слово становится отдельной ИЛИ-группой ──
   if (data === "sub_kw:done_quick") {
     const qw = dialog.data.quickWords || [];
     if (qw.length === 0) return answerCallback(token, cb.id, "Выберите хотя бы одно слово");
 
-    const inputText = qw.join(", ");
     dialog.data.quickWords   = [];
     dialog.data.openCategory = null;
+
+    // Каждое слово — отдельная группа (ИЛИ-логика между группами)
+    // Добавляем все группы сразу, без экрана выбора типов (тип partial по умолчанию)
+    const groups = dialog.data.keywordGroups || [];
+    for (const word of qw) {
+      groups.push([{ key: word, word, type: "partial", isPhrase: false, phraseGroup: null }]);
+    }
+    dialog.data.keywordGroups = groups;
     await saveDialog(env, userId, dialog);
-    return handleKeywordsText(token, chatId, msgId, userId, dialog, env, inputText);
+
+    // Переходим к шагу добавления ещё слов или завершения
+    return finishKeywordGroups(token, chatId, msgId, userId, dialog, env);
   }
 
   // ── Ручной ввод (с возможным дополнением к уже выбранным словам) ─
