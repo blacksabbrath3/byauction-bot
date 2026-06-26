@@ -507,15 +507,35 @@ export async function handleCallback(token, update, env) {
   // ── Готово — подтвердить быстрые слова как одну группу ─────────
   if (data === "sub_kw:done_quick") {
     const qw = dialog.data.quickWords || [];
-    if (qw.length === 0) return answerCallback(token, msgId, "Выберите хотя бы одно слово");
+    if (qw.length === 0) return answerCallback(token, cb.id, "Выберите хотя бы одно слово");
 
-    // Каждое быстрое слово становится отдельной ИЛИ-группой (через запятую)
     const inputText = qw.join(", ");
-    dialog.data.quickWords = [];
+    dialog.data.quickWords   = [];
+    dialog.data.openCategory = null;
     await saveDialog(env, userId, dialog);
-
-    // Переиспользуем существующую логику обработки текстового ввода
     return handleKeywordsText(token, chatId, msgId, userId, dialog, env, inputText);
+  }
+
+  // ── Ручной ввод (с возможным дополнением к уже выбранным словам) ─
+  if (data === "sub_kw:manual") {
+    const qw = dialog.data.quickWords || [];
+    const hint = qw.length > 0
+      ? `Уже выбрано: <b>${qw.join(", ")}</b>\n\nДобавьте ещё слова или отправьте только эти:`
+      : `Введите слова через запятую (запятая = ИЛИ, пробел = И):\n<i>Пример: склад, авто Минск, -аренда</i>`;
+
+    // Оставляем инлайн-сообщение как есть (с кнопками категорий), добавляем force_reply
+    const frMsg = await sendMessage(token, chatId, `✏️ ${hint}`, {
+      reply_markup: {
+        force_reply:             true,
+        input_field_placeholder: qw.length > 0 ? "Добавьте слова или нажмите Enter…" : "склад, авто, -аренда…",
+        selective:               true,
+      },
+    });
+    if (frMsg?.result?.message_id) {
+      dialog.data.kwForceReplyMsgId = frMsg.result.message_id;
+      await saveDialog(env, userId, dialog);
+    }
+    return frMsg;
   }
 
   // ── Ключевые слова: пропустить ────────────────────────────────

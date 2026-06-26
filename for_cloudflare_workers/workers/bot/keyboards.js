@@ -299,6 +299,13 @@ export function inlineKeywordsControl(selectedWords = [], openCategoryId = null)
       { text: `✔️ Готово (${selectedWords.length} сл.)`, callback_data: "sub_kw:done_quick" },
       { text: "🗑 Очистить",                             callback_data: "sub_qw:clear"       },
     ]);
+    rows.push([
+      { text: "⌨️ Добавить вручную",  callback_data: "sub_kw:manual" },
+    ]);
+  } else {
+    rows.push([
+      { text: "⌨️ Ввести вручную", callback_data: "sub_kw:manual" },
+    ]);
   }
   rows.push([
     { text: "⏭ Пропустить", callback_data: "sub_kw:skip"   },
