@@ -1,6 +1,6 @@
 // ============================================================
 // workers/torgigov/index.js
-// 
+//
 // Bindings:
 //   KV:      TORGIGOV_STORAGE, SUBSCRIBERS
 //   Secrets: BOT_TOKEN, PARSER_SECRET
