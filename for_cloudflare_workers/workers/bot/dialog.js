@@ -195,6 +195,8 @@ export async function handleCallback(token, update, env) {
 
   await answerCallback(token, cb.id);
 
+  const dialog = await getDialog(env, userId);
+
   if (data === "sub_cancel") {
     await clearKeywordsForceReply(token, chatId, dialog);
     if (dialog?.data?.priceForceReplyMsgId) {
@@ -215,7 +217,6 @@ export async function handleCallback(token, update, env) {
 
   if (data === "noop") return;
 
-  const dialog = await getDialog(env, userId);
   if (!dialog) {
     return sendMessage(token, chatId, "⚠️ Сессия истекла. Начните заново: /subscribe");
   }
