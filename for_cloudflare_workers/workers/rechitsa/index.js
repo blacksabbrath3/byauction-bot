@@ -1,6 +1,6 @@
 // ============================================================
 // workers/rechitsa/index.js — API для парсера rechitsa.by
-// 
+//
 // Источник: https://rechitsa.by/ru/lenta_novostei-ru/ (новостная лента)
 // Парсер собирает заголовки + тексты новостей, воркер рассылает
 // подписчикам те новости, в которых найдены их ключевые слова.
@@ -15,8 +15,8 @@ import { matchKeywords }                        from "../../shared/matchKeyword.
 import { sendNotifications }                    from "../../shared/subscribers.js";
 import { escapeHtml, jsonResponse, checkAuth }  from "../../shared/format.js";
 
-// Ограничение known_articles чтобы список не рос бесконечно
-const MAX_KNOWN_ARTICLES = 2000;
+// Достаточно помнить последние 50 известных новостей
+const MAX_KNOWN_ARTICLES = 50;
 
 // ── Матчинг ───────────────────────────────────────────────────
 
