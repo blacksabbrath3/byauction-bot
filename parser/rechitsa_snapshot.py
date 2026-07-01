@@ -1,22 +1,20 @@
 """
-rechitsa_snapshot.py — первичный слепок rechitsa.by/gosim
+rechitsa_snapshot.py — первичный слепок rechitsa.by новостной ленты
 
 Алгоритм:
-  1. Парсит первую страницу /gosim (самые свежие публикации)
-  2. Берёт первые SNAPSHOT_LIMIT статей (5 по умолчанию)
+  1. Парсит первую страницу /ru/lenta_novostei-ru/ (самые свежие новости)
+  2. Берёт первые SNAPSHOT_LIMIT URL (50 по умолчанию)
   3. POST /add-articles → сохраняет URL в known_articles в KV
 
-Запускается один раз вручную через rechitsa_snapshot workflow
-перед первым запуском ежедневного парсера.
+Запускается один раз вручную перед первым запуском ежедневного парсера.
 """
 
-import os
 import sys
 import logging
 import requests
 
 import config as cfg
-from rechitsa_lib import parse_gosim_page
+from rechitsa_lib import parse_feed_page, FEED_URL
 
 logging.basicConfig(
     level=logging.INFO,
@@ -27,32 +25,25 @@ log = logging.getLogger(__name__)
 
 WORKER_URL     = cfg.RECHITSA_WORKER_URL
 API_KEY        = cfg.PARSER_SECRET
-SNAPSHOT_LIMIT = 5  # сколько последних статей сохранить как базу
+SNAPSHOT_LIMIT = 50
 
-API_HEADERS = {
-    "X-API-Key":    API_KEY,
-    "Content-Type": "application/json",
-}
+API_HEADERS = {"X-API-Key": API_KEY, "Content-Type": "application/json"}
 
 
-def fetch_latest_articles() -> list[str]:
-    """Парсит первую страницу /gosim и возвращает первые SNAPSHOT_LIMIT URL."""
-    log.info(f"Парсим первую страницу {cfg.RECHITSA_GOSIM_URL} ...")
-    items = parse_gosim_page(page_num=1)
-
+def fetch_latest_urls() -> list[str]:
+    log.info(f"Парсим ленту: {FEED_URL}")
+    items = parse_feed_page(page_num=1)
     if not items:
         log.error("Страница вернула пустой список — проверьте доступность сайта")
         sys.exit(1)
-
     urls = [item["url"] for item in items[:SNAPSHOT_LIMIT]]
-    log.info(f"Получено {len(items)} статей, берём первые {len(urls)}:")
+    log.info(f"Получено {len(items)} новостей, берём первые {len(urls)}")
     for url in urls:
         log.info(f"  {url}")
     return urls
 
 
 def save_snapshot(urls: list[str]) -> None:
-    """Отправляет URL в Worker — они станут известной базой."""
     try:
         r = requests.post(
             f"{WORKER_URL}/add-articles",
@@ -70,18 +61,14 @@ def save_snapshot(urls: list[str]) -> None:
 
 def main() -> None:
     log.info("=== rechitsa_snapshot.py ===")
-
     if not WORKER_URL:
-        log.error("RECHITSA_WORKER_URL не задан")
-        sys.exit(1)
+        log.error("RECHITSA_WORKER_URL не задан"); sys.exit(1)
     if not API_KEY:
-        log.error("PARSER_SECRET не задан")
-        sys.exit(1)
+        log.error("PARSER_SECRET не задан"); sys.exit(1)
 
-    urls = fetch_latest_articles()
+    urls = fetch_latest_urls()
     save_snapshot(urls)
-
-    log.info("=== Снапшот завершён. Теперь можно запускать rechitsa_daily.py ===")
+    log.info("=== Снапшот завершён ===")
 
 
 if __name__ == "__main__":
