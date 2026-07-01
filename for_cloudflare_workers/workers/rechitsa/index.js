@@ -1,7 +1,11 @@
 // ============================================================
-// workers/rechitsa/index.js — API для парсера rechitsa.by/gosim
+// workers/rechitsa/index.js — API для парсера rechitsa.by
 //
-// Bindings (Cloudflare Worker Settings):
+// Источник: https://rechitsa.by/ru/lenta_novostei-ru/ (новостная лента)
+// Парсер собирает заголовки + тексты новостей, воркер рассылает
+// подписчикам те новости, в которых найдены их ключевые слова.
+//
+// Bindings:
 //   KV:      RECHITSA_STORAGE → rechitsa_storage
 //            SUBSCRIBERS      → bot_subscribers
 //   Secrets: BOT_TOKEN, PARSER_SECRET
@@ -11,10 +15,17 @@ import { matchKeywords }                        from "../../shared/matchKeyword.
 import { sendNotifications }                    from "../../shared/subscribers.js";
 import { escapeHtml, jsonResponse, checkAuth }  from "../../shared/format.js";
 
+// Ограничение known_articles чтобы список не рос бесконечно
+const MAX_KNOWN_ARTICLES = 2000;
+
 // ── Матчинг ───────────────────────────────────────────────────
 
 function matchArticle(article, sub) {
-  if (sub.source !== "rechitsa") return false;
+  if (sub.source === "multi") {
+    if (!(sub.sources || []).includes("rechitsa")) return false;
+  } else if (sub.source !== "rechitsa") {
+    return false;
+  }
 
   const text = [article.title, article.full_text || article.excerpt]
     .join(" ").toLowerCase();
@@ -63,7 +74,7 @@ async function handleAddArticles(body, env) {
   const raw      = await env.RECHITSA_STORAGE.get("known_articles");
   const existing = new Set(raw ? JSON.parse(raw) : []);
   const newOnes  = urls.filter(u => !existing.has(u));
-  const merged   = [...newOnes, ...existing];
+  const merged   = [...newOnes, ...existing].slice(0, MAX_KNOWN_ARTICLES);
 
   await env.RECHITSA_STORAGE.put("known_articles", JSON.stringify(merged));
   return jsonResponse({ ok: true, added: newOnes.length, total: merged.length });
