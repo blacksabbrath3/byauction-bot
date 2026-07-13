@@ -4,7 +4,7 @@ butb_snapshot.py — полный слепок лотов et.butb.by
 Алгоритм:
   1. GET /et/auctions.xhtml — первая страница (все лоты)
   2. Определяем общее число страниц из пагинатора
-  3. Собираем lot_id со всех страниц (не более BUTB_SNAPSHOT_LOTS_LIMIT на рубрику)
+  3. Собираем lot_id со всех страниц (не более SNAPSHOT_LOTS_LIMIT на рубрику)
   4. POST /snapshot → {slug: [lot_id, ...]}
   5. POST /save-categories → [{slug, label}, ...]
 
@@ -49,9 +49,9 @@ def collect_snapshot() -> dict[str, list[str]]:
     """
     Собирает lot_id со всех страниц листинга.
     Возвращает {"all": [lot_id, ...]}.
-    Лимит: cfg.BUTB_SNAPSHOT_LOTS_LIMIT лотов.
+    Лимит: cfg.SNAPSHOT_LOTS_LIMIT лотов.
     """
-    limit  = cfg.BUTB_SNAPSHOT_LOTS_LIMIT
+    limit  = cfg.SNAPSHOT_LOTS_LIMIT
     slug   = "all"
     all_ids: list[str] = []
 

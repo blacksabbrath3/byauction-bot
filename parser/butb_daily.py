@@ -107,7 +107,7 @@ def _alert_message(error: str) -> str:
 def send_alert_email(error: str) -> None:
     to_addr   = getattr(cfg, "ALERT_EMAIL", "")
     smtp_host = os.environ.get("ALERT_SMTP_HOST", "smtp.gmail.com")
-    smtp_port = int(os.environ.get("ALERT_SMTP_PORT", "587"))
+    smtp_port = int(os.environ.get("ALERT_SMTP_PORT") or "587")
     smtp_user = os.environ.get("ALERT_SMTP_USER", "")
     smtp_pass = os.environ.get("ALERT_SMTP_PASS", "")
     if not smtp_user or not smtp_pass or not to_addr:
