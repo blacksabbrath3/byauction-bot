@@ -32,6 +32,71 @@ export async function deleteDialog(env, userId) {
   await env.SUBSCRIBERS.delete(`dialog:${userId}`);
 }
 
+// ── Бонусные подписки (начисляются промокодами) ────────────────
+
+export async function getBonusSubs(env, userId) {
+  const raw = await env.SUBSCRIBERS.get(`bonus:${userId}`);
+  return raw ? (parseInt(raw, 10) || 0) : 0;
+}
+
+export async function addBonusSubs(env, userId, amount) {
+  const updated = (await getBonusSubs(env, userId)) + amount;
+  await env.SUBSCRIBERS.put(`bonus:${userId}`, String(updated));
+  return updated;
+}
+
+// ── Промокоды ────────────────────────────────────────────────
+// promo:<CODE> = { bonus, used, createdBy, createdAt, usedBy?, usedAt? }
+
+const PROMO_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // без похожих символов (0/O, 1/I)
+
+function generatePromoCode(length = 8) {
+  const bytes = crypto.getRandomValues(new Uint8Array(length));
+  let code = "";
+  for (let i = 0; i < length; i++) {
+    code += PROMO_CODE_ALPHABET[bytes[i] % PROMO_CODE_ALPHABET.length];
+  }
+  return code;
+}
+
+/** Создаёт уникальный промокод, дающий `bonus` дополнительных подписок. */
+export async function createPromoCode(env, bonus, createdBy) {
+  let code;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    code = generatePromoCode();
+    const existing = await env.SUBSCRIBERS.get(`promo:${code}`);
+    if (!existing) break;
+  }
+  await env.SUBSCRIBERS.put(`promo:${code}`, JSON.stringify({
+    bonus, used: false, createdBy, createdAt: Date.now(),
+  }));
+  return code;
+}
+
+export async function getPromoCode(env, code) {
+  const raw = await env.SUBSCRIBERS.get(`promo:${code}`);
+  return raw ? JSON.parse(raw) : null;
+}
+
+/**
+ * Активирует промокод для пользователя.
+ * @returns {{ok: true, bonus: number}|{ok: false, reason: "not_found"|"used"}}
+ */
+export async function redeemPromoCode(env, userId, rawCode) {
+  const code = (rawCode || "").trim().toUpperCase();
+  const promo = await getPromoCode(env, code);
+  if (!promo) return { ok: false, reason: "not_found" };
+  if (promo.used) return { ok: false, reason: "used" };
+
+  promo.used   = true;
+  promo.usedBy = userId;
+  promo.usedAt = Date.now();
+  await env.SUBSCRIBERS.put(`promo:${code}`, JSON.stringify(promo));
+
+  await addBonusSubs(env, userId, promo.bonus);
+  return { ok: true, bonus: promo.bonus };
+}
+
 // ── Категории ────────────────────────────────────────────────
 
 const FALLBACK_CATEGORIES = [
