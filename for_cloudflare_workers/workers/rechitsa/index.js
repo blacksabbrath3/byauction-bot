@@ -14,6 +14,7 @@
 import { matchKeywords }                        from "../../shared/matchKeyword.js";
 import { sendNotifications }                    from "../../shared/subscribers.js";
 import { escapeHtml, jsonResponse, checkAuth }  from "../../shared/format.js";
+import { recordDigest }                         from "../../shared/digest.js";
 
 // Достаточно помнить последние 50 известных новостей
 const MAX_KNOWN_ARTICLES = 50;
@@ -105,7 +106,10 @@ async function handleSendNotifications(body, env) {
     matchFn: sub => matchArticle(article, sub),
   }));
 
-  const sent = await sendNotifications(items, env.SUBSCRIBERS, env.BOT_TOKEN);
+  const { sent, perUser } = await sendNotifications(items, env.SUBSCRIBERS, env.BOT_TOKEN);
+
+  await recordDigest(env, { source: "rechitsa", newLots: articles.length, perUser, date });
+
   return jsonResponse({ ok: true, sent });
 }
 
