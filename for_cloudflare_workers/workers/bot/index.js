@@ -10,13 +10,67 @@
  */
 
 import { tgCall, sendMessage } from "../../shared/telegram.js";
-import { saveSubs } from "./kv.js";
+import { saveSubs, redeemPromoCode, createPromoCode } from "./kv.js";
 import { mainReplyKeyboard } from "./keyboards.js";
 import { helpText } from "./steps.js";
 import {
   startSubscribeDialog, handleCallback,
   handleTextInDialog, sendListMessage,
+  getMaxSubs, BASE_MAX_SUBS,
 } from "./dialog.js";
+
+// ── Промокоды ─────────────────────────────────────────────────
+
+function isAdmin(env, userId) {
+  const admins = (env.ADMIN_IDS || "")
+    .split(",")
+    .map(s => s.trim())
+    .filter(Boolean);
+  return admins.includes(userId);
+}
+
+async function handlePromoCommand(token, chatId, userId, text, env) {
+  const code = text.split(/\s+/)[1];
+  if (!code) {
+    return sendMessage(token, chatId,
+      "ℹ️ Использование: <code>/promo КОД</code>\n\n" +
+      "Введите промокод, полученный от администратора, чтобы получить дополнительные подписки.");
+  }
+
+  const result = await redeemPromoCode(env, userId, code);
+  if (!result.ok) {
+    const msg = result.reason === "used"
+      ? "⚠️ Этот промокод уже был использован."
+      : "⚠️ Промокод не найден. Проверьте правильность ввода.";
+    return sendMessage(token, chatId, msg);
+  }
+
+  const newLimit = await getMaxSubs(env, userId);
+  return sendMessage(token, chatId,
+    `✅ Промокод активирован!\n\n` +
+    `Начислено дополнительных подписок: <b>${result.bonus}</b>.\n` +
+    `Ваш новый лимит подписок: <b>${newLimit}</b>.`);
+}
+
+async function handleGencodeCommand(token, chatId, userId, text, env) {
+  if (!isAdmin(env, userId)) return; // не выдаём себя обычным пользователям
+
+  const arg = text.split(/\s+/)[1];
+  const n = parseInt(arg, 10);
+  if (!arg || isNaN(n) || n <= 0) {
+    return sendMessage(token, chatId,
+      "ℹ️ Использование: <code>/gencode количество</code>\n\n" +
+      "Например: <code>/gencode 5</code> — создаст код на 5 доп. подписок.");
+  }
+
+  const code = await createPromoCode(env, n, userId);
+  return sendMessage(token, chatId,
+    `✅ Промокод создан:\n\n<code>${code}</code>\n\n` +
+    `Даёт <b>${n}</b> доп. подпис${n === 1 ? "ку" : n < 5 ? "ки" : "ок"} ` +
+    `(сверх базовых ${BASE_MAX_SUBS}).\n\n` +
+    `Отправьте этот код пользователю — он активирует его командой:\n` +
+    `<code>/promo ${code}</code>`);
+}
 
 // ── Bot commands ──────────────────────────────────────────────
 
@@ -25,6 +79,7 @@ async function setMyCommands(token) {
     commands: [
       { command: "subscribe",       description: "➕ Создать подписку"     },
       { command: "list",            description: "📋 Мои подписки"          },
+      { command: "promo",           description: "🎟 Активировать промокод" },
       { command: "unsubscribe_all", description: "🗑 Удалить все подписки"  },
       { command: "help",            description: "❓ Справка"               },
     ],
@@ -74,6 +129,14 @@ async function handleTelegramUpdate(update, env) {
   if (text === "/unsubscribe_all" || text === "🗑 Удалить все подписки") {
     await saveSubs(env, userId, []);
     return sendMessage(token, chatId, "✅ Все подписки удалены.");
+  }
+
+  if (text.startsWith("/promo")) {
+    return handlePromoCommand(token, chatId, userId, text, env);
+  }
+
+  if (text.startsWith("/gencode")) {
+    return handleGencodeCommand(token, chatId, userId, text, env);
   }
 
   await handleTextInDialog(token, chatId, userId, text, env);

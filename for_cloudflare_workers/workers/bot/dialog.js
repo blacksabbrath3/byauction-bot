@@ -5,7 +5,7 @@
 import { sendMessage, editMessage, answerCallback, deleteMessage } from "../../shared/telegram.js";
 import { sourceById, physicalSourceIds } from "../../shared/sources.js";
 import {
-  getSubs, saveSubs, getDialog, saveDialog, deleteDialog,
+  getSubs, saveSubs, getDialog, saveDialog, deleteDialog, getBonusSubs,
 } from "./kv.js";
 import {
   MAX_KEYWORD_GROUPS,
@@ -22,7 +22,12 @@ import {
 } from "./steps.js";
 import { parseGroupInput, buildFlatTokens } from "./keywords.js";
 
-const MAX_SUBS = 3;
+export const BASE_MAX_SUBS = 3;
+
+/** Лимит подписок пользователя = базовый лимит + бонусы, начисленные промокодами. */
+export async function getMaxSubs(env, userId) {
+  return BASE_MAX_SUBS + await getBonusSubs(env, userId);
+}
 
 // ── Активные группы ключевых слов (регион / лот) ──────────────
 // dialog.data.keywordPhase === "region" → работаем с regionKeywordGroups
@@ -174,9 +179,11 @@ async function sendWordTypeScreen(token, chatId, helpText, summaryText, keyboard
 
 export async function startSubscribeDialog(token, chatId, userId, env) {
   const subs = await getSubs(env, userId);
-  if (subs.length >= MAX_SUBS) {
+  const maxSubs = await getMaxSubs(env, userId);
+  if (subs.length >= maxSubs) {
     return sendMessage(token, chatId,
-      `⚠️ Достигнут лимит подписок (${MAX_SUBS}). Удалите лишние командой /list.`);
+      `⚠️ Достигнут лимит подписок (${maxSubs}). Удалите лишние командой /list ` +
+      `или активируйте промокод: /promo КОД.`);
   }
   await saveDialog(env, userId, { step: "source", data: {} });
   return sendMessage(token, chatId,
@@ -887,9 +894,10 @@ export async function finishSubscription(token, chatId, userId, msgId, dialog, e
   }
 
   const subs = await getSubs(env, userId);
-  if (subs.length >= MAX_SUBS) {
+  const maxSubs = await getMaxSubs(env, userId);
+  if (subs.length >= maxSubs) {
     await deleteDialog(env, userId);
-    return sendMessage(token, chatId, `⚠️ Достигнут лимит подписок (${MAX_SUBS}).`);
+    return sendMessage(token, chatId, `⚠️ Достигнут лимит подписок (${maxSubs}).`);
   }
 
   delete dialog.data.currentFlatTokens;
@@ -943,8 +951,12 @@ export async function finishSubscription(token, chatId, userId, msgId, dialog, e
 
 export async function sendListMessage(token, chatId, userId, env, editMsgId = null) {
   const subs = await getSubs(env, userId);
+  const maxSubs = await getMaxSubs(env, userId);
   if (!subs.length) {
-    const text = "📋 У вас нет активных подписок.\n\nСоздайте новую командой /subscribe";
+    const text =
+      "📋 У вас нет активных подписок.\n\n" +
+      `Лимит подписок: ${maxSubs}.\n` +
+      "Создайте новую командой /subscribe";
     if (editMsgId) return editMessage(token, chatId, editMsgId, text);
     return sendMessage(token, chatId, text);
   }
@@ -955,6 +967,8 @@ export async function sendListMessage(token, chatId, userId, env, editMsgId = nu
     lines.push("➖➖➖➖➖➖➖➖➖➖");
     lines.push(`<b>${i + 1}.</b> ${subSummary(sub)}`);
   });
+  lines.push("");
+  lines.push(`Использовано подписок: ${subs.length} / ${maxSubs}`);
 
   const keyboard = {
     inline_keyboard: subs.map((sub, i) => ([{
