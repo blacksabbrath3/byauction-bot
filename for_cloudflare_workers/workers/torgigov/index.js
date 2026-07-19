@@ -24,6 +24,7 @@ import { matchKeywords }                       from "../../shared/matchKeyword.j
 import { sendNotifications }                   from "../../shared/subscribers.js";
 import { escapeHtml, jsonResponse, checkAuth } from "../../shared/format.js";
 import { matchRegion }                         from "../../shared/region.js";
+import { recordDigest }                        from "../../shared/digest.js";
 
 // ── Константы ──────────────────────────────────────────────
 
@@ -393,7 +394,19 @@ async function handleSendNotifications(body, env) {
     matchFn: sub => matchLot(lot, sub),
   }));
 
-  const sent = await sendNotifications(items, env.SUBSCRIBERS, env.BOT_TOKEN);
+  const { sent, perUser } = await sendNotifications(items, env.SUBSCRIBERS, env.BOT_TOKEN);
+
+  // Разбивка по категориям (числовой lot.category → человекочитаемое название)
+  const categories = {};
+  for (const lot of lots) {
+    const label = resolveCategory(lot.category) || "Без категории";
+    categories[label] = (categories[label] || 0) + 1;
+  }
+
+  await recordDigest(env, {
+    source: "torgigov", newLots: lots.length, categories, perUser, date,
+  });
+
   return jsonResponse({ ok: true, sent });
 }
 
