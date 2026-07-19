@@ -22,6 +22,7 @@ import { matchKeywords }                       from "../../shared/matchKeyword.j
 import { sendNotifications }                   from "../../shared/subscribers.js";
 import { escapeHtml, jsonResponse, checkAuth } from "../../shared/format.js";
 import { matchRegion }                         from "../../shared/region.js";
+import { recordDigest }                        from "../../shared/digest.js";
 
 // ── Константы ──────────────────────────────────────────────
 
@@ -225,7 +226,11 @@ async function handleSendNotifications(body, env) {
     };
   });
 
-  const sent = await sendNotifications(items, env.SUBSCRIBERS, env.BOT_TOKEN);
+  const { sent, perUser } = await sendNotifications(items, env.SUBSCRIBERS, env.BOT_TOKEN);
+
+  // Категорий по лотам БУТБ не собирает (daily-парсер работает по единому slug "all")
+  await recordDigest(env, { source: "butb", newLots: lots.length, perUser, date });
+
   return jsonResponse({ ok: true, sent });
 }
 
