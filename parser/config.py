@@ -210,3 +210,19 @@ STOP_AFTER_CONSECUTIVE_KNOWN = int(
     os.environ.get("STOP_AFTER_CONSECUTIVE_KNOWN", "3")
 )
 
+# ════════════════════════════════════════════════════════════
+# gostorg.by — НАСТРОЙКИ ПАРСЕРА
+# ════════════════════════════════════════════════════════════
+
+# URL воркера gostorg (gostorg-worker)
+GOSTORG_WORKER_URL = os.environ.get("GOSTORG_WORKER_URL", "").rstrip("/")
+
+# Сайт отдаёт последние лоты прямо на главной странице (новые — сверху),
+# пагинация не нужна — снимаем только верхние N карточек.
+GOSTORG_SNAPSHOT_LIMIT     = 20
+GOSTORG_DAILY_TTL_SECONDS  = 86400
+
+# Небольшая пауза перед запросом (вежливость к сайту)
+GOSTORG_DELAY_MIN = 1.0
+GOSTORG_DELAY_MAX = 3.0
+
