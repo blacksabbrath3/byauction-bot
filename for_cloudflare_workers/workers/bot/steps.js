@@ -93,6 +93,15 @@ export function subSummary(sub) {
     ].join("\n");
   }
 
+  if (sub.source === "gostorg") {
+    return [
+      "🏛 <b>Госторг</b> — электронные торги (gostorg.by)",
+      regionLine(sub),
+      kw,
+      ...(sub.max_price > 0 ? [`<b>Макс. цена:</b> ${sub.max_price.toLocaleString("ru-RU")} BYN`] : []),
+    ].join("\n");
+  }
+
   // eauction (default)
   const types = Array.isArray(sub.type) ? sub.type : [sub.type || "auction"];
   const typeLabel = types.length >= 2
@@ -113,6 +122,7 @@ function sourceHeader(source) {
     case "rechitsa": return "📋 <b>Новая подписка — Речицкий райисполком</b>";
     case "torgigov": return "📋 <b>Новая подписка — torgi.gov.by</b>";
     case "butb":     return "📋 <b>Новая подписка — БУТБ (et.butb.by)</b>";
+    case "gostorg":  return "📋 <b>Новая подписка — Госторг (gostorg.by)</b>";
     case "multi":    return "📋 <b>Новая подписка — несколько сайтов</b>";
     default:         return "📋 <b>Новая подписка — e-auction.by</b>";
   }
@@ -220,7 +230,8 @@ export function helpText() {
     `• 🏛 <a href="https://e-auction.by">e-auction.by</a> — аукционы и фиксированная цена\n` +
     `• 🏙 <a href="https://rechitsa.by/gosim">rechitsa.by/gosim</a> — приобретение и аренда недвижимости\n` +
     `• 🏦 <a href="https://torgi.gov.by">torgi.gov.by</a> — государственная торговая площадка\n` +
-    `• 🏗 <a href="https://et.butb.by">et.butb.by</a> — имущество БУТБ\n\n` +
+    `• 🏗 <a href="https://et.butb.by">et.butb.by</a> — имущество БУТБ\n` +
+    `• 🏛 <a href="https://gostorg.by">gostorg.by</a> — электронные торги Госторга РБ\n\n` +
     `Используйте кнопки меню ниже 👇`
   );
 }

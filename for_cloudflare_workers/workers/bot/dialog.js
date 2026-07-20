@@ -267,6 +267,14 @@ export async function handleCallback(token, update, env) {
         { reply_markup: inlineRegion() });
     }
 
+    if (source === "gostorg") {
+      dialog.step = "region";
+      await saveDialog(env, userId, dialog);
+      return editMessage(token, chatId, msgId,
+        `📋 <b>Новая подписка — Госторг (gostorg.by)</b>\n\nШаг 1 из 2 — Выберите регион:`,
+        { reply_markup: inlineRegion() });
+    }
+
     // eauction
     dialog.step = "type";
     await saveDialog(env, userId, dialog);
@@ -385,7 +393,12 @@ export async function handleCallback(token, update, env) {
     dialog.step = "region_oblast";
     await saveDialog(env, userId, dialog);
     const src = dialog.data.source;
-    const title = `📋 <b>Новая подписка — ${src === "butb" ? "БУТБ (et.butb.by)" : "e-auction.by"}</b>\n\nВыберите область:`;
+    const oblastTitles = {
+      butb:     "БУТБ (et.butb.by)",
+      torgigov: "torgi.gov.by",
+      gostorg:  "Госторг (gostorg.by)",
+    };
+    const title = `📋 <b>Новая подписка — ${oblastTitles[src] || "e-auction.by"}</b>\n\nВыберите область:`;
     return editMessage(token, chatId, msgId, title, { reply_markup: inlineOblasts() });
   }
 
@@ -931,6 +944,11 @@ export async function finishSubscription(token, chatId, userId, msgId, dialog, e
     sub = { id: shortUUID(), source: "butb", region: dialog.data.region || "all",
             regionKeywords, regionDistricts, regionCouncilGroups,
             keywords: dialog.data.keywordGroups || [] };
+  } else if (src === "gostorg") {
+    sub = { id: shortUUID(), source: "gostorg", region: dialog.data.region || "all",
+            regionKeywords, regionDistricts, regionCouncilGroups,
+            keywords: dialog.data.keywordGroups || [],
+            max_price: dialog.data.max_price || 0 };
   } else {
     sub = { id: shortUUID(), source: "eauction", type: dialog.data.type || "auction",
             region: dialog.data.region || "keywords",

@@ -29,6 +29,7 @@ export function inlineSourceChoice() {
     [{ text: "🏙 Речицкий райисполком — аренда и покупка недвижимости", callback_data: "sub_src:rechitsa" }],
     [{ text: "🏦 torgi.gov.by — государственная торговая площадка",    callback_data: "sub_src:torgigov" }],
     [{ text: "🏗 БУТБ — имущество (et.butb.by)",                       callback_data: "sub_src:butb"     }],
+    [{ text: "🏛 gostorg.by — электронные торги Госторга РБ",         callback_data: "sub_src:gostorg"  }],
     [{ text: "❌ Отмена", callback_data: "sub_cancel" }],
   ]};
 }
