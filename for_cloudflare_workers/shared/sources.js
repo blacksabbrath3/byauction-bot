@@ -44,6 +44,13 @@ export const SOURCES = [
     description: "Аренда и покупка недвижимости",
     hasRegion:   false,
   },
+  {
+    id:          "gostorg",
+    physicalId:  "gostorg",
+    label:       "🏛 Госторг (gostorg.by)",
+    description: "Электронные торги имущества",
+    hasRegion:   true,
+  },
 ];
 
 export function sourceById(id) {
