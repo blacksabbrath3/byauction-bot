@@ -1,5 +1,5 @@
 // ============================================================
-// workers/gostorg/index.js
+// workers/gostorg/index.js 
 //
 // Bindings:
 //   KV:      GOSTORG_STORAGE, SUBSCRIBERS
