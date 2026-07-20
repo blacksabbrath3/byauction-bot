@@ -1,0 +1,48 @@
+name: gostorg_daily
+
+on:
+  schedule:
+    # Зеркальное расписание стартов (UTC, шаг 45 мин, утреннее окно — вне зоны
+    # перегрузки GitHub Actions ~22:00-02:00 UTC, +20 мин от eauction):
+    #   Пн 06:27  Вт 07:12  Ср 07:57  Чт 08:42 (пик)  Пт 07:57  Сб 07:12  Вс 06:27
+    - cron: "27 6 * * 1"    # Понедельник 06:27 UTC (09:27 Минск)
+    - cron: "12 7 * * 2"    # Вторник     07:12 UTC (10:12 Минск)
+    - cron: "57 7 * * 3"    # Среда       07:57 UTC (10:57 Минск)
+    - cron: "42 8 * * 4"    # Четверг     08:42 UTC (11:42 Минск)
+    - cron: "57 7 * * 5"    # Пятница     07:57 UTC (10:57 Минск)
+    - cron: "12 7 * * 6"    # Суббота     07:12 UTC (10:12 Минск)
+    - cron: "27 6 * * 0"    # Воскресенье 06:27 UTC (09:27 Минск)
+  workflow_dispatch:
+    inputs:
+      skip_delay:
+        description: "Пропустить рандомную задержку"
+        required: false
+        default: "true"
+
+jobs:
+  parse:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60  # уведомления отправляются сразу, долгое ожидание не нужно
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install requests beautifulsoup4
+
+      - name: Run gostorg_daily
+        env:
+          GOSTORG_WORKER_URL:     ${{ secrets.GOSTORG_WORKER_URL }}
+          PARSER_SECRET:          ${{ secrets.PARSER_SECRET }}
+          BOT_TOKEN:              ${{ secrets.BOT_TOKEN }}
+          SKIP_RANDOM_DELAY:      ${{ github.event.inputs.skip_delay || 'false' }}
+        run: |
+          cd parser
+          python gostorg_daily.py
