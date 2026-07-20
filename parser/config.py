@@ -217,8 +217,11 @@ STOP_AFTER_CONSECUTIVE_KNOWN = int(
 # URL воркера gostorg (gostorg-worker)
 GOSTORG_WORKER_URL = os.environ.get("GOSTORG_WORKER_URL", "").rstrip("/")
 
-# Сайт отдаёт последние лоты прямо на главной странице (новые — сверху),
-# пагинация не нужна — снимаем только верхние N карточек.
+# Один запрос к главной странице отдаёт всю ленту (без пагинации/AJAX).
+# GOSTORG_SNAPSHOT_LIMIT используется дважды:
+#   - снапшотом — берёт только верхние N карточек как стартовый baseline
+#   - дневным парсером — как размер пачки для find_new_lots() (стоп после
+#     STOP_AFTER_CONSECUTIVE_KNOWN известных подряд)
 GOSTORG_SNAPSHOT_LIMIT     = 20
 GOSTORG_DAILY_TTL_SECONDS  = 86400
 
