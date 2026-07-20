@@ -3,11 +3,11 @@ main = "index.js"
 compatibility_date = "2024-01-01"
 
 [[kv_namespaces]]
-binding = "GOSTORG_STORAGE"
-id = "REPLACE_WITH_GOSTORG_KV_ID"
+binding = "gostorg_storage"
+id = "bcf7969efebc4761bcd08bb9e8801f4d"
 
 [[kv_namespaces]]
 binding = "SUBSCRIBERS"
-id = "REPLACE_WITH_SUBSCRIBERS_KV_ID"
+id = "c1f5a6b255264509ac2ed8f24bf9c511"
 
 # Secrets: BOT_TOKEN, PARSER_SECRET
