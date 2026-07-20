@@ -1,0 +1,13 @@
+name = "gostorg-worker"
+main = "index.js"
+compatibility_date = "2024-01-01"
+
+[[kv_namespaces]]
+binding = "GOSTORG_STORAGE"
+id = "REPLACE_WITH_GOSTORG_KV_ID"
+
+[[kv_namespaces]]
+binding = "SUBSCRIBERS"
+id = "REPLACE_WITH_SUBSCRIBERS_KV_ID"
+
+# Secrets: BOT_TOKEN, PARSER_SECRET
