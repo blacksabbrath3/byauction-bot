@@ -144,14 +144,21 @@ def _extract_discount(card) -> int | None:
 def parse_listing(limit: int = None) -> list[dict]:
     """
     Парсит главную страницу gostorg.by и возвращает список лотов
-    (самые новые — первыми в списке, как на сайте).
+    (самые новые — первыми, как на сайте).
+
+    Один HTTP-запрос отдаёт сразу всю ленту, которая есть в DOM
+    (на практике — сотни карточек, без AJAX-подгрузки и пагинации),
+    поэтому `limit` — это просто опциональная обрезка уже полученного
+    списка (используется снапшотом, которому нужны только верхние 20),
+    а не параметр для повторных запросов.
     """
-    limit = limit or cfg.GOSTORG_SNAPSHOT_LIMIT
     soup = get_soup(BASE_URL)
     if soup is None:
         return []
 
-    cards = soup.select(".auction-list__item")[:limit]
+    cards = soup.select(".auction-list__item")
+    if limit:
+        cards = cards[:limit]
     lots = []
 
     for card in cards:

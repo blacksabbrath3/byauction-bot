@@ -24,7 +24,7 @@ def main():
     if not API_KEY:    log.error("PARSER_SECRET не задан");     sys.exit(1)
 
     log.info("Снимаем главную страницу…")
-    lots = parse_listing()
+    lots = parse_listing(limit=cfg.GOSTORG_SNAPSHOT_LIMIT)
     if not lots:
         log.error("Главная страница вернула пустой список — проверьте доступность сайта")
         sys.exit(1)

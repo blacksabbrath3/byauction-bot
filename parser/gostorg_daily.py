@@ -16,6 +16,7 @@ gostorg_daily.py — ежедневный парсер gostorg.by
 """
 import os, sys, time, random, logging, datetime, requests
 import config as cfg
+import lot_utils
 from gostorg_lib import parse_listing
 
 logging.basicConfig(level=logging.INFO,
@@ -48,6 +49,45 @@ def load_known() -> set[str]:
         return set()
 
 
+def collect_new_lots(known: set[str]) -> tuple[list[dict], list[dict]]:
+    """
+    Снимает всю ленту с главной страницы одним запросом (там сотни карточек,
+    без пагинации/AJAX) и обрабатывает её пачками по GOSTORG_SNAPSHOT_LIMIT (20),
+    останавливаясь после cfg.STOP_AFTER_CONSECUTIVE_KNOWN известных лотов подряд —
+    единичный "выпавший" известный лот посреди ленты сбор не прерывает.
+
+    Возвращает (новые_лоты, все_снятые_лоты).
+    """
+    all_lots = parse_listing()  # без limit — вся лента одним запросом
+    if not all_lots:
+        return [], []
+
+    batch_size  = cfg.GOSTORG_SNAPSHOT_LIMIT
+    all_new: list[dict] = []
+    scanned: list[dict] = []
+    consecutive = 0
+
+    for i in range(0, len(all_lots), batch_size):
+        batch = all_lots[i:i + batch_size]
+        scanned.extend(batch)
+
+        new_in_batch, stopped, consecutive = lot_utils.find_new_lots(
+            batch, known, _consecutive_in=consecutive
+        )
+        all_new.extend(new_in_batch)
+
+        log.info(
+            f"  пачка {i // batch_size + 1}: лотов {len(batch)}, новых {len(new_in_batch)}"
+            + (f" (серия {consecutive} известных — стоп)" if stopped else
+               f" (известных подряд: {consecutive})" if consecutive else "")
+        )
+
+        if stopped:
+            break
+
+    return all_new, scanned
+
+
 def random_delay():
     if os.environ.get("SKIP_RANDOM_DELAY", "").lower() == "true":
         return
@@ -69,8 +109,8 @@ def main():
     log.info(f"Известных лотов: {len(known)}")
 
     time.sleep(random.uniform(cfg.GOSTORG_DELAY_MIN, cfg.GOSTORG_DELAY_MAX))
-    lots = parse_listing()
-    if not lots:
+    new_lots, scanned = collect_new_lots(known)
+    if not scanned:
         log.warning("Главная страница вернула пустой список — сайт недоступен?")
         try:
             api_post("/save-daily-run", {"date": today, "lots_found": 0})
@@ -78,12 +118,11 @@ def main():
             log.error(f"save-daily-run: {e}")
         return
 
-    new_lots = [lot for lot in lots if lot["lot_id"] not in known]
-    log.info(f"Новых лотов: {len(new_lots)} из {len(lots)} снятых")
+    log.info(f"Новых лотов: {len(new_lots)} (просканировано {len(scanned)} из ленты)")
     for lot in new_lots:
         log.info(f"  + {lot['title'][:60]}  ({lot['price'] or 'без цены'})")
 
-    all_ids = [lot["lot_id"] for lot in lots]
+    all_ids = [lot["lot_id"] for lot in scanned]
     try:
         r = api_post("/add-lots", {"lot_ids": all_ids})
         log.info(f"add-lots: {r}")
