@@ -81,17 +81,35 @@ def _worker_post(path: str, body: dict) -> dict | None:
 
 
 def get_soup(url: str) -> BeautifulSoup | None:
-    """GET страницы через Worker /fetch-page."""
-    data = _worker_post("fetch-page", {"url": url})
-    if not data:
-        return None
-    if not data.get("ok"):
-        print(f"  [!] fetch-page error: {data.get('error')} (url={url})")
-        return None
-    if data.get("status", 0) >= 400:
-        print(f"  [!] fetch-page HTTP {data['status']} (url={url})")
-        return None
-    return BeautifulSoup(data["html"], "html.parser")
+    """
+    GET страницы через Worker /fetch-page.
+
+    /fetch-page может ответить 200 с полем status=5xx внутри JSON (например
+    522 — Cloudflare не достучался до origin gostorg.by за отведённое время).
+    Это не сетевая ошибка и не ловится retry-логикой _worker_post, поэтому
+    ретраим отдельно здесь — такие сбои чаще всего временные.
+    """
+    for attempt in range(1, cfg.REQUEST_RETRIES + 1):
+        data = _worker_post("fetch-page", {"url": url})
+        if not data:
+            return None  # сетевая ошибка до Worker — _worker_post уже отретраил и залогировал
+        if not data.get("ok"):
+            print(f"  [!] fetch-page error: {data.get('error')} (url={url})")
+            return None
+
+        status = data.get("status", 0)
+        if status >= 500:
+            print(f"  [!] fetch-page HTTP {status} ({attempt}/{cfg.REQUEST_RETRIES}, url={url})")
+            if attempt < cfg.REQUEST_RETRIES:
+                time.sleep(cfg.RETRY_BASE_DELAY * attempt)
+                continue
+            return None
+        if status >= 400:
+            print(f"  [!] fetch-page HTTP {status} (url={url})")
+            return None
+
+        return BeautifulSoup(data["html"], "html.parser")
+    return None
 
 
 # ════════════════════════════════════════════════════════════
