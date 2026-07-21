@@ -3,7 +3,7 @@ main = "index.js"
 compatibility_date = "2024-01-01"
 
 [[kv_namespaces]]
-binding = "gostorg_storage"
+binding = "GOSTORG_STORAGE"
 id = "bcf7969efebc4761bcd08bb9e8801f4d"
 
 [[kv_namespaces]]
