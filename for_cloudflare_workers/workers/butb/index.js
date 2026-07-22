@@ -193,7 +193,10 @@ async function handleSendNotifications(body, env) {
   if (!raw) return jsonResponse({ ok: false, error: "No data for this date/slug" }, 404);
 
   const lots = JSON.parse(raw);
-  if (!lots.length) return jsonResponse({ ok: true, sent: 0 });
+  if (!lots.length) {
+    await recordDigest(env, { source: "butb", newLots: 0, perUser: {}, date });
+    return jsonResponse({ ok: true, sent: 0 });
+  }
 
   // Формируем items для sendNotifications из shared/subscribers.js
   const items = lots.map(lot => {
