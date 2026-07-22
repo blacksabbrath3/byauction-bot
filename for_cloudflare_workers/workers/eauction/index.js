@@ -256,7 +256,10 @@ async function handleSendNotifications(body, env) {
   if (!date || !section) return new Response("Missing date or section", { status: 400 });
 
   const lotsRaw = await env.EAUCTION_STORAGE.get(`daily_lots:${date}:${section}`);
-  if (!lotsRaw) return jsonResponse({ ok: true, sent: 0, reason: "no lots" });
+  if (!lotsRaw) {
+    await recordDigest(env, { source: "eauction", newLots: 0, perUser: {}, date });
+    return jsonResponse({ ok: true, sent: 0, reason: "no lots" });
+  }
 
   const lots  = JSON.parse(lotsRaw);
   const items = lots.map(lot => ({
