@@ -1,5 +1,5 @@
 // ============================================================
-// workers/gostorg/index.js 
+// workers/gostorg/index.js
 //
 // Bindings:
 //   KV:      GOSTORG_STORAGE, SUBSCRIBERS
@@ -193,7 +193,10 @@ async function handleSendNotifications(body, env) {
   if (!date) return new Response("Missing date", { status: 400 });
 
   const lotsRaw = await env.GOSTORG_STORAGE.get(`daily_lots:${date}`);
-  if (!lotsRaw) return jsonResponse({ ok: true, sent: 0, reason: "no lots" });
+  if (!lotsRaw) {
+    await recordDigest(env, { source: "gostorg", newLots: 0, perUser: {}, date });
+    return jsonResponse({ ok: true, sent: 0, reason: "no lots" });
+  }
 
   const lots  = JSON.parse(lotsRaw);
   const items = lots.map(lot => ({
@@ -247,7 +250,13 @@ export default {
       return new Response("Not Found", { status: 404 });
     } catch (e) {
       console.error("CRASH:", e.message, e.stack);
-      return new Response("Internal Error", { status: 500 });
+      // Отдаём текст ошибки в теле ответа (эндпоинт защищён PARSER_SECRET) —
+      // иначе причину 500 видно только через `wrangler tail`, а не в логе
+      // GitHub Actions.
+      return new Response(JSON.stringify({ ok: false, error: e.message }), {
+        status: 500,
+        headers: { "Content-Type": "application/json" },
+      });
     }
   },
 };
