@@ -8,7 +8,7 @@
  * формирует сообщение и отправляет его всем ADMIN_IDS.
  */
 
-const DIGEST_TTL = 4 * 24 * 3600; // 4 дня — запас на случай сбоя cron-задачи бота
+const DIGEST_TTL = 9 * 24 * 3600; // 9 дней — с запасом покрывает недельную статистику (7 дней)
 
 export function todayDateUTC() {
   return new Date().toISOString().slice(0, 10);
@@ -39,6 +39,7 @@ export function subLabel(sub) {
     torgigov: "torgi.gov.by",
     butb:     "БУТБ",
     rechitsa: "Речицкий райисполком",
+    gostorg:  "Госторг (gostorg.by)",
   };
   const name = sub.source === "multi"
     ? `Несколько сайтов (${(sub.sources || []).map(s => srcNames[s] || s).join(", ")})`
@@ -94,4 +95,58 @@ export async function recordDigest(env, { source, newLots, categories, perUser, 
 
   await saveDigest(env, d, digest);
   return digest;
+}
+
+// ── Недельная статистика (7 дней) ───────────────────────────
+
+/** Список из n дат YYYY-MM-DD, идущих назад от endDate (включительно), UTC. */
+function lastNDatesUTC(n, endDate) {
+  const end = endDate ? new Date(`${endDate}T00:00:00Z`) : new Date();
+  const dates = [];
+  for (let i = 0; i < n; i++) {
+    const d = new Date(end);
+    d.setUTCDate(d.getUTCDate() - i);
+    dates.push(d.toISOString().slice(0, 10));
+  }
+  return dates;
+}
+
+/** Схлопывает несколько дневных дайджестов в один агрегат {sources, users}. */
+export function aggregateDigests(digests) {
+  const combined = { sources: {}, users: {} };
+
+  for (const digest of digests) {
+    for (const [source, stats] of Object.entries(digest.sources || {})) {
+      const prev = combined.sources[source] || { newLots: 0, sent: 0, categories: {} };
+      combined.sources[source] = {
+        newLots:    prev.newLots + (stats.newLots || 0),
+        sent:       prev.sent    + (stats.sent    || 0),
+        categories: mergeCounts(prev.categories, stats.categories),
+      };
+    }
+
+    for (const [userId, subCounts] of Object.entries(digest.users || {})) {
+      combined.users[userId] ??= {};
+      for (const [subId, { count, label }] of Object.entries(subCounts)) {
+        const prev = combined.users[userId][subId];
+        combined.users[userId][subId] = {
+          count: (prev?.count || 0) + count,
+          label: prev?.label || label,
+        };
+      }
+    }
+  }
+
+  return combined;
+}
+
+/**
+ * Агрегированная статистика за последние 7 дней (включая endDate).
+ * @returns {{dateFrom: string, dateTo: string, sources: object, users: object}}
+ */
+export async function getWeeklyDigest(env, endDate) {
+  const dates   = lastNDatesUTC(7, endDate);
+  const digests = await Promise.all(dates.map(d => getDigest(env, d)));
+  const { sources, users } = aggregateDigests(digests);
+  return { dateFrom: dates[dates.length - 1], dateTo: dates[0], sources, users };
 }
