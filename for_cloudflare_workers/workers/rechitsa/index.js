@@ -98,7 +98,10 @@ async function handleSendNotifications(body, env) {
   if (!date) return new Response("Missing date", { status: 400 });
 
   const raw = await env.RECHITSA_STORAGE.get(`daily_articles:${date}`);
-  if (!raw) return jsonResponse({ ok: true, sent: 0, reason: "no articles" });
+  if (!raw) {
+    await recordDigest(env, { source: "rechitsa", newLots: 0, perUser: {}, date });
+    return jsonResponse({ ok: true, sent: 0, reason: "no articles" });
+  }
 
   const articles = JSON.parse(raw);
   const items    = articles.map(article => ({
