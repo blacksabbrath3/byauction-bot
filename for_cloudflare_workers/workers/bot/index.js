@@ -18,7 +18,7 @@ import {
   handleTextInDialog, sendListMessage,
   getMaxSubs, BASE_MAX_SUBS,
 } from "./dialog.js";
-import { getDigest, saveDigest, todayDateUTC } from "../../shared/digest.js";
+import { getDigest, saveDigest, todayDateUTC, getWeeklyDigest } from "../../shared/digest.js";
 
 // ── Дневной дайджест для админов ────────────────────────────────
 
@@ -27,6 +27,7 @@ const DIGEST_SOURCE_LABELS = {
   torgigov: "🏦 torgi.gov.by",
   butb:     "🏗 БУТБ (et.butb.by)",
   rechitsa: "🏙 Речицкий райисполком",
+  gostorg:  "🏛 Госторг (gostorg.by)",
 };
 
 /** Разбивает длинный текст на куски ≤ maxLen символов, не разрывая строки. */
@@ -47,10 +48,10 @@ function chunkText(text, maxLen = 3500) {
   return chunks;
 }
 
-function formatSourcesBlock(digest) {
+function formatSourcesBlock(digest, emptyText = "За сегодня новых лотов не найдено ни на одном сайте.") {
   const sourceEntries = Object.entries(digest.sources || {});
   if (!sourceEntries.length) {
-    return "За сегодня новых лотов не найдено ни на одном сайте.";
+    return emptyText;
   }
 
   const lines = [];
@@ -90,9 +91,12 @@ async function fetchDisplayName(token, userId) {
   return `id ${userId}`;
 }
 
-async function formatUsersBlock(token, digest) {
+async function formatUsersBlock(token, digest, emptyText = "Уведомления сегодня не отправлялись.") {
   const entries = Object.entries(digest.users || {});
-  if (!entries.length) return "Уведомления сегодня не отправлялись.";
+  if (!entries.length) return emptyText;
+
+  const totalOf = subCounts => Object.values(subCounts).reduce((s, v) => s + v.count, 0);
+  entries.sort((a, b) => totalOf(b[1]) - totalOf(a[1]));
 
   const lines = [];
   for (const [userId, subCounts] of entries) {
@@ -118,8 +122,21 @@ async function sendDailyDigest(env, { date, force = false } = {}) {
   const sourcesText = formatSourcesBlock(digest);
   const usersText   = await formatUsersBlock(env.BOT_TOKEN, digest);
 
-  const summaryMsg = `📊 <b>Дневной дайджест — ${d}</b>\n\n${sourcesText}`;
-  const usersMsg   = `👥 <b>Кому отправлены лоты — ${d}</b>\n\n${usersText}`;
+  const weekly = await getWeeklyDigest(env, d);
+  const weekSourcesText = formatSourcesBlock(
+    weekly, "За последние 7 дней новых лотов не найдено ни на одном сайте.");
+  const weekUsersText   = await formatUsersBlock(
+    env.BOT_TOKEN, weekly, "За последние 7 дней уведомления не отправлялись.");
+
+  const summaryMsg =
+    `📊 <b>Дневной дайджест — ${d}</b>\n\n${sourcesText}\n\n` +
+    `➖➖➖➖➖➖➖➖➖➖\n\n` +
+    `📈 <b>За 7 дней (${weekly.dateFrom} … ${weekly.dateTo})</b>\n\n${weekSourcesText}`;
+
+  const usersMsg =
+    `👥 <b>Кому отправлены лоты — ${d}</b>\n\n${usersText}\n\n` +
+    `➖➖➖➖➖➖➖➖➖➖\n\n` +
+    `👥 <b>Получатели за 7 дней (${weekly.dateFrom} … ${weekly.dateTo})</b>\n\n${weekUsersText}`;
 
   for (const adminId of admins) {
     for (const chunk of chunkText(summaryMsg)) {
