@@ -229,3 +229,19 @@ GOSTORG_DAILY_TTL_SECONDS  = 86400
 GOSTORG_DELAY_MIN = 1.0
 GOSTORG_DELAY_MAX = 3.0
 
+# ════════════════════════════════════════════════════════════
+# beltorgi.by — НАСТРОЙКИ ПАРСЕРА
+# ════════════════════════════════════════════════════════════
+
+# URL воркера beltorgi (beltorgi-worker)
+BELTORGI_WORKER_URL = os.environ.get("BELTORGI_WORKER_URL", "").rstrip("/")
+
+BELTORGI_DAILY_TTL_SECONDS = 86400
+
+# Главная страница отдаёт карточки без строгого порядка "новые сверху"
+# (виджеты вперемешку + дубли) — daily-парсер сравнивает весь снятый
+# дедуплицированный набор со списком известных id целиком, без
+# постраничной остановки после N известных подряд.
+BELTORGI_DELAY_MIN = 1.0
+BELTORGI_DELAY_MAX = 3.0
+
