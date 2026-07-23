@@ -10,7 +10,7 @@ compatibility_date = "2024-01-01"
 
 [[kv_namespaces]]
 binding = "BELTORGI_STORAGE"
-id = "REPLACE_WITH_BELTORGI_KV_ID"
+id = "919f95ee1ea045ea9a9ea48bb619f3f0"
 
 [[kv_namespaces]]
 binding = "SUBSCRIBERS"
