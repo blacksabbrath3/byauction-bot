@@ -14,6 +14,6 @@ id = "REPLACE_WITH_BELTORGI_KV_ID"
 
 [[kv_namespaces]]
 binding = "SUBSCRIBERS"
-id = "REPLACE_WITH_SUBSCRIBERS_KV_ID"
+id = "c1f5a6b255264509ac2ed8f24bf9c511"
 
 # Secrets: BOT_TOKEN, PARSER_SECRET
