@@ -30,6 +30,7 @@ export function inlineSourceChoice() {
     [{ text: "🏦 torgi.gov.by — государственная торговая площадка",    callback_data: "sub_src:torgigov" }],
     [{ text: "🏗 БУТБ — имущество (et.butb.by)",                       callback_data: "sub_src:butb"     }],
     [{ text: "🏛 gostorg.by — электронные торги Госторга РБ",         callback_data: "sub_src:gostorg"  }],
+    [{ text: "⚖️ beltorgi.by — торги по банкротству",                 callback_data: "sub_src:beltorgi" }],
     [{ text: "❌ Отмена", callback_data: "sub_cancel" }],
   ]};
 }
