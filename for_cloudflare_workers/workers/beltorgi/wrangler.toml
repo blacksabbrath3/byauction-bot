@@ -1,0 +1,19 @@
+name = "beltorgi-worker"
+main = "index.js"
+compatibility_date = "2024-01-01"
+
+# ВАЖНО: имена биндингов (BELTORGI_STORAGE, SUBSCRIBERS) должны совпадать
+# С ТОЧНОСТЬЮ ДО РЕГИСТРА с тем, что используется в коде (env.BELTORGI_STORAGE
+# и env.SUBSCRIBERS в index.js). Несовпадение регистра при ручной настройке
+# в дашборде Cloudflare приводит к общему 500 Internal Server Error без
+# явного намёка на причину (было на gostorg-worker).
+
+[[kv_namespaces]]
+binding = "BELTORGI_STORAGE"
+id = "REPLACE_WITH_BELTORGI_KV_ID"
+
+[[kv_namespaces]]
+binding = "SUBSCRIBERS"
+id = "REPLACE_WITH_SUBSCRIBERS_KV_ID"
+
+# Secrets: BOT_TOKEN, PARSER_SECRET
