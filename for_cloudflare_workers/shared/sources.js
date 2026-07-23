@@ -51,6 +51,13 @@ export const SOURCES = [
     description: "Электронные торги имущества",
     hasRegion:   true,
   },
+  {
+    id:          "beltorgi",
+    physicalId:  "beltorgi",
+    label:       "⚖️ Белреализация (beltorgi.by)",
+    description: "Торги по банкротству — аукционы и продажа без торгов",
+    hasRegion:   true,
+  },
 ];
 
 export function sourceById(id) {

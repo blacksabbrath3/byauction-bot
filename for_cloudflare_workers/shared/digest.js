@@ -40,6 +40,7 @@ export function subLabel(sub) {
     butb:     "БУТБ",
     rechitsa: "Речицкий райисполком",
     gostorg:  "Госторг (gostorg.by)",
+    beltorgi: "Белреализация (beltorgi.by)",
   };
   const name = sub.source === "multi"
     ? `Несколько сайтов (${(sub.sources || []).map(s => srcNames[s] || s).join(", ")})`
