@@ -1,0 +1,30 @@
+name: beltorgi_snapshot
+
+on:
+  workflow_dispatch:   # только вручную, один раз перед первым запуском daily-парсера
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install requests beautifulsoup4
+
+      - name: Run beltorgi_snapshot
+        env:
+          BELTORGI_WORKER_URL: ${{ secrets.BELTORGI_WORKER_URL }}
+          PARSER_SECRET:       ${{ secrets.PARSER_SECRET }}
+        run: |
+          cd parser
+          python beltorgi_snapshot.py

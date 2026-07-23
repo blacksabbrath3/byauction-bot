@@ -1,0 +1,48 @@
+name: beltorgi_daily
+
+on:
+  schedule:
+    # Зеркальное расписание стартов (UTC, шаг 45 мин, утреннее окно — вне зоны
+    # перегрузки GitHub Actions ~22:00-02:00 UTC, +25 мин от eauction):
+    #   Пн 06:32  Вт 07:17  Ср 08:02  Чт 08:47 (пик)  Пт 08:02  Сб 07:17  Вс 06:32
+    - cron: "32 6 * * 1"    # Понедельник 06:32 UTC (09:32 Минск)
+    - cron: "17 7 * * 2"    # Вторник     07:17 UTC (10:17 Минск)
+    - cron: "2 8 * * 3"     # Среда       08:02 UTC (11:02 Минск)
+    - cron: "47 8 * * 4"    # Четверг     08:47 UTC (11:47 Минск)
+    - cron: "2 8 * * 5"     # Пятница     08:02 UTC (11:02 Минск)
+    - cron: "17 7 * * 6"    # Суббота     07:17 UTC (10:17 Минск)
+    - cron: "32 6 * * 0"    # Воскресенье 06:32 UTC (09:32 Минск)
+  workflow_dispatch:
+    inputs:
+      skip_delay:
+        description: "Пропустить рандомную задержку"
+        required: false
+        default: "true"
+
+jobs:
+  parse:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install requests beautifulsoup4
+
+      - name: Run beltorgi_daily
+        env:
+          BELTORGI_WORKER_URL:    ${{ secrets.BELTORGI_WORKER_URL }}
+          PARSER_SECRET:          ${{ secrets.PARSER_SECRET }}
+          BOT_TOKEN:              ${{ secrets.BOT_TOKEN }}
+          SKIP_RANDOM_DELAY:      ${{ github.event.inputs.skip_delay || 'false' }}
+        run: |
+          cd parser
+          python beltorgi_daily.py
