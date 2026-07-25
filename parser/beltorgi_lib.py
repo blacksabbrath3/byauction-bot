@@ -45,6 +45,7 @@ import re
 import time
 import requests
 from bs4 import BeautifulSoup
+from urllib.parse import urljoin
 
 import config as cfg
 
@@ -114,7 +115,7 @@ def _parse_card(card) -> dict | None:
     link = card.select_one("a[href]")
     if not link or not link.get("href"):
         return None
-    url = link["href"]
+    url = urljoin(BASE_URL + "/", link["href"])
 
     title_el = card.select_one(".card-title a")
     title = (title_el.get("title") or title_el.get_text(strip=True)) if title_el \
