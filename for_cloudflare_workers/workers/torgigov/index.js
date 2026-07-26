@@ -173,7 +173,7 @@ function matchLot(lot, sub) {
 function formatLotMessage(lot) {
   const region   = resolveRegion(lot.region);
   const category = resolveCategory(lot.category);
-  let msg = `🏛 <a href="${lot.url}">${escapeHtml(lot.title)}</a>`;
+  let msg = `🏛 <a href="${escapeHtml(lot.url)}">${escapeHtml(lot.title)}</a>`;
   if (lot.auction_start) msg += `\n📅 Старт: ${escapeHtml(lot.auction_start)}`;
   if (lot.price)         msg += `\n💰 ${escapeHtml(lot.price)}`;
   if (region)            msg += `\n📍 ${escapeHtml(region)}`;
