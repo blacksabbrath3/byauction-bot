@@ -64,7 +64,7 @@ function matchLot(lot, sub) {
 }
 
 function formatLotMessage(lot) {
-  let msg = `🏛 <a href="${lot.url}">${escapeHtml(lot.title)}</a>`;
+  let msg = `🏛 <a href="${escapeHtml(lot.url)}">${escapeHtml(lot.title)}</a>`;
 
   const tags = [];
   if (lot.is_new)                    tags.push("🆕 Новый лот");
