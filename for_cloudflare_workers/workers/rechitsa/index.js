@@ -37,7 +37,7 @@ function matchArticle(article, sub) {
 // ── Форматирование ────────────────────────────────────────────
 
 function formatArticleMessage(article) {
-  let msg = `📋 <a href="${article.url}">${escapeHtml(article.title)}</a>`;
+  let msg = `📋 <a href="${escapeHtml(article.url)}">${escapeHtml(article.title)}</a>`;
   if (article.date)    msg += `\n📅 ${escapeHtml(article.date)}`;
   if (article.excerpt) msg += `\n\n${escapeHtml(article.excerpt)}`;
   return msg;
