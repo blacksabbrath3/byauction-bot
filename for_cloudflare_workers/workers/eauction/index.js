@@ -122,7 +122,7 @@ function matchLot(lot, sub) {
 // ── Форматирование ────────────────────────────────────────────
 
 function formatLotMessage(lot) {
-  let msg = `🔔 <a href="${lot.url}">${escapeHtml(lot.title)}</a>`;
+  let msg = `🔔 <a href="${escapeHtml(lot.url)}">${escapeHtml(lot.title)}</a>`;
   if (lot.price)       msg += `\n💰 Цена: ${escapeHtml(lot.price)}`;
   if (lot.location)    msg += `\n📍 ${escapeHtml(lot.location)}`;
   if (lot.area)        msg += `\n📐 Площадь: ${escapeHtml(lot.area)} м²`;
