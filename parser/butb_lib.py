@@ -39,12 +39,17 @@ import time
 import random
 import requests
 from bs4 import BeautifulSoup
-from urllib.parse import urlencode, parse_qs
+from urllib.parse import urlencode, parse_qs, urljoin
 
 import config as cfg
 
 BASE_URL    = "https://et.butb.by"
 AUCTIONS_URL = f"{BASE_URL}/et/auctions.xhtml"
+
+# Заглушка «нет фото» — простое имя без хеш-папки, встречается у разных
+# лотов без реального фото (в отличие от tmp_files/<hash>/<name>.jpg —
+# те уникальны и это настоящие фотографии лота).
+_NO_PHOTO_RE = re.compile(r"^tmp_files/thumb_\d+\.png$")
 
 _SESSION = requests.Session()
 
@@ -263,6 +268,14 @@ def _parse_lot_row(row) -> dict | None:
     deadline   = _clean(val2_els[1].get_text()) if len(val2_els) > 1 else ""
     trade_date = _clean(val2_els[2].get_text()) if len(val2_els) > 2 else ""
 
+    # Превью-фото (пропускаем общую заглушку «нет фото»)
+    image = ""
+    img_el = row.select_one('img[src*="tmp_files"]')
+    if img_el:
+        src = img_el.get("src", "")
+        if src and not _NO_PHOTO_RE.match(src):
+            image = urljoin(BASE_URL + "/", src)
+
     return {
         "lot_id":     lot_id,
         "url":        url,
@@ -276,6 +289,7 @@ def _parse_lot_row(row) -> dict | None:
         "deposit":    deposit,
         "deadline":   deadline,
         "trade_date": trade_date,
+        "image":      image,
     }
 
 

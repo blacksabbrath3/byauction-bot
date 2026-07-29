@@ -48,7 +48,7 @@ import time
 import random
 import requests
 from bs4 import BeautifulSoup
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urljoin
 
 import config as cfg
 
@@ -159,6 +159,19 @@ def _extract_discount(card) -> int | None:
     return int(m.group(1)) if m else None
 
 
+def _extract_image(card) -> str:
+    """
+    Картинка лениво грузится (класс 'lazy'): в сыром HTML (без выполнения
+    JS, а мы делаем обычный fetch) реальный путь лежит в data-src, а src
+    может быть заглушкой. data-src обычно относительный — достраиваем.
+    """
+    img = card.select_one("a.auction-list__img img")
+    if not img:
+        return ""
+    src = img.get("data-src") or img.get("src") or ""
+    return urljoin(BASE_URL + "/", src) if src else ""
+
+
 def parse_listing(limit: int = None) -> list[dict]:
     """
     Парсит главную страницу gostorg.by и возвращает список лотов
@@ -206,6 +219,7 @@ def parse_listing(limit: int = None) -> list[dict]:
             "is_new":           card.select_one(".tag__background-new-lot") is not None,
             "discount_percent": _extract_discount(card),
             "auction_date":     _extract_auction_date(card),
+            "image":            _extract_image(card),
         })
 
     print(f"  Снято карточек: {len(lots)}")

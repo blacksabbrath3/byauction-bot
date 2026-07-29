@@ -190,6 +190,39 @@ def extract_lot_paths(soup: BeautifulSoup, section_key: str) -> list[str]:
     return paths
 
 
+def extract_lot_images(soup: BeautifulSoup, section_key: str) -> dict[str, str]:
+    """
+    Превью-картинки со страницы списка (карточка .product-item целиком —
+    это сама ссылка <a>, картинка лежит внутри неё), привязанные к тому же
+    stored_path, что возвращает extract_lot_paths — той же логикой отбора,
+    чтобы не тратить лишний запрос: картинка уже есть на странице списка.
+    Возвращает {stored_path: image_url}.
+    """
+    images: dict[str, str] = {}
+    for a in soup.find_all("a", href=True):
+        href = a["href"]
+        if href.startswith("https://e-auction.by"):
+            path = href[len("https://e-auction.by"):]
+        elif href.startswith("/"):
+            path = href
+        else:
+            continue
+        path = path.split("?")[0].split("#")[0]
+        if not path.endswith("/"):
+            path += "/"
+        if not is_lot_path(path, section_key):
+            continue
+        stored = path_to_stored(path)
+        if stored in images:
+            continue
+        img = a.select_one("img")
+        if img:
+            src = img.get("src") or img.get("data-src") or ""
+            if src:
+                images[stored] = urljoin(BASE_URL, src)
+    return images
+
+
 # ════════════════════════════════════════════════════════════
 # ПАГИНАЦИЯ
 # ════════════════════════════════════════════════════════════

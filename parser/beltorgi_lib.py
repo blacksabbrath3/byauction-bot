@@ -147,6 +147,9 @@ def _parse_card(card) -> dict | None:
     old_price_el = card.select_one(".old_price")
     old_price = old_price_el.get_text(" ", strip=True) if old_price_el else ""
 
+    img_el = card.select_one("img.card-img-top")
+    image = urljoin(BASE_URL + "/", img_el["src"]) if img_el and img_el.get("src") else ""
+
     return {
         "lot_id":           lot_id,
         "url":              url,
@@ -158,6 +161,7 @@ def _parse_card(card) -> dict | None:
         "price":            price,
         "old_price":        old_price,
         "is_auction":       deadline_el is not None,
+        "image":            image,
     }
 
 

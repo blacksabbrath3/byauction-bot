@@ -109,16 +109,17 @@ def parse_section_daily(
     section_key: str,
     section_path: str,
     snapshot: dict[str, int],
-) -> list[str]:
+) -> tuple[list[str], dict[str, str]]:
     """
     Парсит раздел постранично (сортировка по дате, новые первыми).
     Накапливает пути и при каждой новой порции вызывает find_new_lots.
     Останавливается когда find_new_lots сигнализирует о конце новых.
 
-    Возвращает список новых путей.
+    Возвращает (список новых путей, {путь: url превью-картинки}).
     """
     print(f"\n[+] Раздел: {section_key}")
     all_daily: list[str] = []   # накопленный список из дневного парсинга
+    all_images: dict[str, str] = {}
     page = 1
     stopped = False
 
@@ -132,6 +133,7 @@ def parse_section_daily(
             break
 
         found = lib.extract_lot_paths(soup, section_key)
+        all_images.update(lib.extract_lot_images(soup, section_key))
         print(f"     лотов на странице: {len(found)}")
 
         if not found:
@@ -161,7 +163,7 @@ def parse_section_daily(
     new_paths = lib.find_new_lots(all_daily, snapshot)
     print(f"  Новых лотов: {len(new_paths)} из {len(all_daily)} проверенных")
     lib.pause(cfg.DELAY_BETWEEN_SECTIONS)
-    return new_paths
+    return new_paths, all_images
 
 
 # ════════════════════════════════════════════════════════════
@@ -198,7 +200,7 @@ def add_to_known_lots(section: str, new_paths: list[str], current_snapshot: dict
 # ПАРСИНГ ДЕТАЛЕЙ И СУТОЧНАЯ ПАЧКА
 # ════════════════════════════════════════════════════════════
 
-def fetch_details_and_save(section: str, new_paths: list[str]) -> None:
+def fetch_details_and_save(section: str, new_paths: list[str], images: dict[str, str]) -> None:
     if not new_paths:
         return
 
@@ -211,6 +213,7 @@ def fetch_details_and_save(section: str, new_paths: list[str]) -> None:
             print(f"      [!] Не удалось получить детали лота — пропуск")
             continue
         lot["section"] = section
+        lot["image"] = images.get(path, "")
         lots.append(lot)
         lib.pause(cfg.DELAY_BETWEEN_LOT_PAGES)
 
@@ -298,7 +301,7 @@ def main() -> None:
         print(f"\n{'─' * 60}")
         snap = known_all.get(section_key, {})
 
-        new_paths = parse_section_daily(section_key, section_path, snap)
+        new_paths, images = parse_section_daily(section_key, section_path, snap)
 
         if not new_paths:
             print(f"  Новых лотов нет.")
@@ -307,7 +310,7 @@ def main() -> None:
         total_new += len(new_paths)
         sections_with_new.append(section_key)
         add_to_known_lots(section_key, new_paths, snap)
-        fetch_details_and_save(section_key, new_paths)
+        fetch_details_and_save(section_key, new_paths, images)
 
     print(f"\n{'─' * 60}")
     print(f"  Итого новых лотов: {total_new}")
