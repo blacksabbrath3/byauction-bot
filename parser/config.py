@@ -150,6 +150,14 @@ RECHITSA_DELAY_MAX              = 5.0
 # URL воркера torgi.gov.by (torgigov-worker)
 TORGIGOV_WORKER_URL = os.environ.get("TORGIGOV_WORKER_URL", "").rstrip("/")
 
+# Базовый URL для раздачи фото лотов (по uid из /api/lots → images[].thumbnails[].uid).
+# Подтверждено реальной ссылкой: https://api.torgi.gov.by:8081/<uid> — обратите
+# внимание на нестандартный порт 8081 (отличается от основного API).
+# Переопределяется через секрет TORGIGOV_IMAGE_BASE_URL при необходимости.
+TORGIGOV_IMAGE_BASE_URL = os.environ.get(
+    "TORGIGOV_IMAGE_BASE_URL", "https://api.torgi.gov.by:8081"
+).rstrip("/")
+
 # Те же HTTP-заголовки что и у e-auction используются через REQUEST_HEADERS
 # Те же паузы DELAY_BETWEEN_LIST_PAGES / DELAY_BETWEEN_LOT_PAGES / DELAY_BETWEEN_SECTIONS
 # Те же параметры алгоритма SEQ_WINDOW / SEQ_MIN_MATCHES / FULL_RESET_EVERY_DAYS

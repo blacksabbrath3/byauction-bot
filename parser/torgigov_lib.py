@@ -299,6 +299,34 @@ def _slugify(title: str) -> str:
     return slug[:60].rstrip("-")
 
 
+def _pick_thumbnail_uid(raw: dict, preferred_type: int = 1) -> str:
+    """
+    Выбирает uid превью-картинки лота: сперва среди помеченных main=true,
+    иначе первое изображение из images[]. Внутри картинки берёт миниатюру
+    нужного размера (type=1 — самая маленькая, ~180-260px), если её нет —
+    любую другую доступную.
+    """
+    images = raw.get("images") or []
+    if not images:
+        return ""
+    main_images = [img for img in images if img.get("main")]
+    img = main_images[0] if main_images else images[0]
+    thumbnails = img.get("thumbnails") or []
+    if not thumbnails:
+        return ""
+    for t in thumbnails:
+        if t.get("type") == preferred_type:
+            return t.get("uid", "")
+    return thumbnails[0].get("uid", "")
+
+
+def _build_image_url(uid: str) -> str:
+    """Строит ссылку на превью-картинку лота из uid (домен подтверждён примером с сайта)."""
+    if not uid or not cfg.TORGIGOV_IMAGE_BASE_URL:
+        return ""
+    return f"{cfg.TORGIGOV_IMAGE_BASE_URL.rstrip('/')}/{uid}"
+
+
 def normalize_lot(raw: dict) -> dict:
     """
     Нормализует объект лота из API.
@@ -327,6 +355,7 @@ def normalize_lot(raw: dict) -> dict:
         "price":         _format_price(raw.get("initialPrice") or raw.get("currentInitialPrice")),
         "auction_start": _ticks_to_date(raw.get("auctionStart")),
         "state":         str(raw.get("state") or ""),
+        "image":         _build_image_url(_pick_thumbnail_uid(raw)),
     }
 
 
