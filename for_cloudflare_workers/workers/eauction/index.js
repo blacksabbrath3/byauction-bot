@@ -18,8 +18,8 @@ import { recordDigest }                         from "../../shared/digest.js";
 
 // ── Константы ─────────────────────────────────────────────────
 
-const AUCTION_SECTIONS = ["auction", "gos"];
-const FIXED_SECTIONS   = ["shop", "showcase", "commerce"];
+const AUCTION_SECTIONS = ["auction", "gos", "commerce"];
+const FIXED_SECTIONS   = ["shop", "showcase"];
 const ALL_SECTIONS     = [...AUCTION_SECTIONS, ...FIXED_SECTIONS];
 
 // Ограничение размера списка known_lots на раздел — без этого список растёт
@@ -264,6 +264,7 @@ async function handleSendNotifications(body, env) {
   const lots  = JSON.parse(lotsRaw);
   const items = lots.map(lot => ({
     text:    formatLotMessage(lot),
+    photo:   AUCTION_SECTIONS.includes(lot.section) ? (lot.image || undefined) : undefined,
     matchFn: sub => matchLot(lot, sub),
   }));
 
