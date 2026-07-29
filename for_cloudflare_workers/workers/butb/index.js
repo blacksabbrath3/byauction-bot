@@ -220,6 +220,7 @@ async function handleSendNotifications(body, env) {
 
     return {
       text:    lines.join("\n"),
+      photo:   lot.image || undefined,
       matchFn: (sub) => {
         if (sub.source !== "butb" && sub.source !== "multi") return false;
         if (sub.source === "multi" && !(sub.sources || []).includes("butb")) return false;
