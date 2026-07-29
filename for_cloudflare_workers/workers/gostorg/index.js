@@ -201,6 +201,7 @@ async function handleSendNotifications(body, env) {
   const lots  = JSON.parse(lotsRaw);
   const items = lots.map(lot => ({
     text:    formatLotMessage(lot),
+    photo:   lot.image || undefined,
     matchFn: sub => matchLot(lot, sub),
   }));
 
