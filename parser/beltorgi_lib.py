@@ -44,6 +44,7 @@ lot_id берётся из data-id контейнера — стабильный
 import re
 import time
 import requests
+from requests.utils import requote_uri
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin
 
@@ -115,7 +116,7 @@ def _parse_card(card) -> dict | None:
     link = card.select_one("a[href]")
     if not link or not link.get("href"):
         return None
-    url = urljoin(BASE_URL + "/", link["href"])
+    url = requote_uri(urljoin(BASE_URL + "/", link["href"]))
 
     title_el = card.select_one(".card-title a")
     title = (title_el.get("title") or title_el.get_text(strip=True)) if title_el \
@@ -148,7 +149,7 @@ def _parse_card(card) -> dict | None:
     old_price = old_price_el.get_text(" ", strip=True) if old_price_el else ""
 
     img_el = card.select_one("img.card-img-top")
-    image = urljoin(BASE_URL + "/", img_el["src"]) if img_el and img_el.get("src") else ""
+    image = requote_uri(urljoin(BASE_URL + "/", img_el["src"])) if img_el and img_el.get("src") else ""
 
     return {
         "lot_id":           lot_id,
