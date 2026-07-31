@@ -165,6 +165,23 @@ def _parse_card(card) -> dict | None:
     }
 
 
+def fetch_full_address(lot_url: str) -> str:
+    """
+    Главная страница отдаёт только область (например, 'Минская обл.') —
+    полный адрес есть только на странице самого лота, в meta description
+    вида 'Регион: <полный адрес>, тел. <телефон>'. Делает отдельный запрос
+    (только для реально новых лотов — их немного за день).
+    """
+    soup = get_soup(lot_url)
+    if soup is None:
+        return ""
+    meta = soup.find("meta", attrs={"name": "description"})
+    if not meta or not meta.get("content"):
+        return ""
+    m = re.search(r"Регион:\s*(.+?)(?:,\s*тел\.|$)", meta["content"])
+    return m.group(1).strip() if m else ""
+
+
 def parse_listing() -> list[dict]:
     """
     Парсит главную страницу beltorgi.by и возвращает дедуплицированный

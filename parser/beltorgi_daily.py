@@ -9,14 +9,16 @@ beltorgi_daily.py — ежедневный парсер beltorgi.by
   1. GET /known-lots           → set известных lot_id
   2. Снимаем и дедуплицируем карточки с главной страницы
   3. Новые — те, кого нет среди известных
-  4. POST /add-lots             → добавляем ВСЕ увиденные id
-  5. POST /save-daily-lots      → сохраняем пачку новых лотов (если есть)
-  6. POST /save-daily-run       → отмечаем время запуска
-  7. POST /send-notifications   → рассылаем сразу
+  4. Для новых лотов — отдельный запрос за полным адресом (на главной
+     видна только область, полный адрес — только на странице лота)
+  5. POST /add-lots             → добавляем ВСЕ увиденные id
+  6. POST /save-daily-lots      → сохраняем пачку новых лотов (если есть)
+  7. POST /save-daily-run       → отмечаем время запуска
+  8. POST /send-notifications   → рассылаем сразу
 """
 import os, sys, time, random, logging, datetime, requests
 import config as cfg
-from beltorgi_lib import parse_listing
+from beltorgi_lib import parse_listing, fetch_full_address
 
 logging.basicConfig(level=logging.INFO,
     format="%(asctime)s [beltorgi] %(levelname)s: %(message)s")
@@ -86,6 +88,19 @@ def main():
     auc  = sum(1 for l in new_lots if l["is_auction"])
     shop = len(new_lots) - auc
     log.info(f"Новых лотов: {len(new_lots)} из {len(lots)} снятых (аукцион: {auc}, магазин: {shop})")
+
+    # Главная страница отдаёт только область ("Минская обл.") — полный адрес
+    # есть только на странице самого лота. Ходим за ним отдельно, но только
+    # для реально новых лотов (их обычно единицы за день).
+    for lot in new_lots:
+        try:
+            full_address = fetch_full_address(lot["url"])
+            if full_address:
+                lot["location"] = full_address
+        except Exception as e:
+            log.warning(f"  [!] Не удалось получить полный адрес для {lot['lot_id']}: {e}")
+        time.sleep(random.uniform(cfg.BELTORGI_DELAY_MIN, cfg.BELTORGI_DELAY_MAX))
+
     for lot in new_lots:
         log.info(f"  + {lot['title'][:60]}  ({lot['price'] or 'без цены'})")
 
