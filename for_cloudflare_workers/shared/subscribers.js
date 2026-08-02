@@ -1,6 +1,9 @@
 import { tgSend, sendPhoto } from "./telegram.js";
 
-const CAPTION_LIMIT = 1024; // лимит Telegram для caption у фото (у текста sendMessage — 4096)
+const CAPTION_LIMIT   = 1024; // лимит Telegram для caption у фото (у текста sendMessage — 4096)
+const PHOTO_SEND_DELAY_MS = 400; // пауза перед каждым фото — не долбить источник картинок подряд
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
  * Отправляет одно уведомление о лоте. Если item.photo указан, шлёт фото
@@ -11,6 +14,7 @@ const CAPTION_LIMIT = 1024; // лимит Telegram для caption у фото (�
  */
 async function sendLotNotification(token, chatId, item) {
   if (item.photo) {
+    await sleep(PHOTO_SEND_DELAY_MS); // небольшая пауза перед запросом за картинкой
     const fits = item.text.length <= CAPTION_LIMIT;
     const result = await sendPhoto(
       token, chatId, item.photo,
