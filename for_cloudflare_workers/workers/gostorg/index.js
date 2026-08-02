@@ -123,10 +123,24 @@ async function handleFetchPage(body) {
   }
 }
 
+// Безопасный парсинг known_lots — если значение в KV повреждено (например,
+// после ручной правки в дашборде), не роняем весь запрос, а откатываемся
+// на пустой список и логируем предупреждение.
+function safeParseKnownLots(raw) {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (e) {
+    console.error("known_lots повреждён в KV, сбрасываю на []:", e.message);
+    return [];
+  }
+}
+
 // GET /known-lots
 async function handleGetKnownLots(env) {
   const raw = await env.GOSTORG_STORAGE.get("known_lots");
-  return jsonResponse(raw ? JSON.parse(raw) : []);
+  return jsonResponse(safeParseKnownLots(raw));
 }
 
 // GET /status
@@ -166,7 +180,7 @@ async function handleAddLots(body, env) {
   if (!Array.isArray(lot_ids)) return new Response("Bad request", { status: 400 });
 
   const raw      = await env.GOSTORG_STORAGE.get("known_lots");
-  const existing = raw ? JSON.parse(raw) : [];
+  const existing = safeParseKnownLots(raw);
   const existingSet = new Set(existing);
   const newIds   = lot_ids.map(String).filter(id => !existingSet.has(id));
 
