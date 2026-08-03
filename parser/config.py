@@ -55,27 +55,30 @@ RANDOM_DELAY_MAX_SECONDS = 180  # 3 минуты
 # ════════════════════════════════════════════════════════════
 
 SECTIONS = {
-    "auction":  "/auction/",
-    "commerce": "/commerce/",
-    "gos":      "/gos/",
-    "shop":     "/shop/",
-    "showcase": "/showcase/",
+    "auction":   "/auction/",
+    "commerce":  "/commerce/",
+    "gos":       "/gos/",
+    "shop":      "/shop/",
+    "showcase":  "/showcase/",
+    "konfiskat": "/konfiskat/",
 }
 
 SECTION_SORT_PARAM = {
-    "auction":  "order=date-asc",
-    "commerce": "order=date-asc",
-    "gos":      "order=date-asc",
-    "shop":     "order=date-asc",
-    "showcase": "order=date-asc",
+    "auction":   "order=date-asc",
+    "commerce":  "order=date-asc",
+    "gos":       "order=date-asc",
+    "shop":      "order=date-asc",
+    "showcase":  "order=date-asc",
+    "konfiskat": "order=date-asc",
 }
 
 SECTION_NAMES = {
-    "auction":  "⚖️ Арестованное имущество",
-    "commerce": "🏠 Частное имущество",
-    "gos":      "🏛️ Государственное имущество",
-    "shop":     "🛒 Интернет-магазин",
-    "showcase": "🪟 Интернет-витрина",
+    "auction":   "⚖️ Арестованное имущество",
+    "commerce":  "🏠 Частное имущество",
+    "gos":       "🏛️ Государственное имущество",
+    "shop":      "🛒 Интернет-магазин",
+    "showcase":  "🪟 Интернет-витрина",
+    "konfiskat": "🚨 Конфискат",
 }
 
 # ════════════════════════════════════════════════════════════
