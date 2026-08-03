@@ -1,5 +1,5 @@
 // ============================================================
-// workers/eauction/index.js — API для парсера e-auction.by
+// workers/eauction/index.js — API для парсера e-auction.by 
 //
 // Bindings (Cloudflare Worker Settings):
 //   KV:      EAUCTION_STORAGE → eauction_storage
