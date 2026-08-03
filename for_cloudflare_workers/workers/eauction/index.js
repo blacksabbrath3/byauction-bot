@@ -18,7 +18,7 @@ import { recordDigest }                         from "../../shared/digest.js";
 
 // ── Константы ─────────────────────────────────────────────────
 
-const AUCTION_SECTIONS = ["auction", "gos", "commerce"];
+const AUCTION_SECTIONS = ["auction", "gos", "commerce", "konfiskat"];
 const FIXED_SECTIONS   = ["shop", "showcase"];
 const ALL_SECTIONS     = [...AUCTION_SECTIONS, ...FIXED_SECTIONS];
 
